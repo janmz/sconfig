@@ -1,0 +1,20 @@
+{ 
+  "test.app.name": "Testing i18n for sconfig",
+  "test.app.version": "Version %s from %s",
+  "test.app.working_directory": "Working directory is '%s'",
+  "test.error.no_directory": "Folder '%s' does not exist.",
+
+  "config.hardware_id_failed": "hardware ID cannot be determined",
+  "config.default_error": "error reading default version of config file: %v",
+  "config.default_unsupported": "unsupported type for default value: %v",
+  "config.decrypt_failed": "failed to decrypt %s password: %v",
+  "config.config_no_struct": "config must be a pointer to a struct",
+  "config.failed_defaulting": "failed to set default config entries: %v",
+  "config.failed_parsing":"failed to parse config file: %v",
+  "config.failed_checking":"failed to check config entries: %v",
+  "config.failed_decode_pw":"failed to decode passwords in config entries: %v",
+  "config.failed_build_json":"failed to marshal config to JSON: %v",
+  "config.failed_writing":"failed to write config to file %s: %v",
+  "config.password_message":"Entre new password here",
+  "config.read_failed": "failed to read config file: %v"  
+}

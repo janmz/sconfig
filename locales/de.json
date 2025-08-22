@@ -1,0 +1,20 @@
+{
+  "test.app.name": "Teste i18n für sconfig",
+  "test.app.version": "Version %s vom %s",
+  "test.app.working_directory": "Das Arbeitsverzeichnis ist '%s'",
+  "test.error.no_directory": "Das Verzeichnis '%s' wurde nicht gefunden.",
+
+  "config.hardware_id_failed": "Config: Hardware ID kann nicht bestimmt werden",
+  "config.default_error": "Fehler beim Auslesen der default-Version der config-Datei: %v",
+  "config.default_unsupported": "Nicht unterstützter Typ für Standard-Wert: %v",
+  "config.decrypt_failed": "Entschlüsselung des %s Passworts fehlgeschlagen: %v",
+  "config.read_failed": "Fehler beim Lesen der Config-Datei: %v",
+  "config.config_no_struct": "config muss ein Zeiger auf ein struct sein",
+  "config.failed_defaulting": "Die default-Werte konnten nicht gesetzt werden: %v",
+  "config.failed_parsing":"Die Config-Datei konnte nicht analysiert werden: %v",
+  "config.failed_checking":"Die Config-Datei enthält illegale Werte: %v",
+  "config.failed_decode_pw":"Die Passwörter in der Config-Datei konnten nicht entschlüsselt werden: %v",
+  "config.failed_build_json":"Die Config-Daten konnten nicht nach JSON gewandelt werden: %v",
+  "config.failed_writing":"Fehler beim Schreiben der Config-Datei nach %s: %v",
+  "config.password_message":"Hier neues Passwort eintragen"
+}
