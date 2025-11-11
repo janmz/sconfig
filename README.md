@@ -27,23 +27,23 @@ go get github.com/janmz/sconfig
 package main
 
 import (
-	"fmt"
-	"github.com/janmz/sconfig"
+    "fmt"
+    "github.com/janmz/sconfig"
 )
 
 type AppConfig struct {
-	Version           int    `json:"Version"`
-	DBPassword        string `json:"DBPassword"`
-	DBSecurePassword  string `json:"DBSecurePassword"`
-	Port              int    `json:"Port" default:"8080"`
+    Version           int    `json:"Version"`
+    DBPassword        string `json:"DBPassword"`
+    DBSecurePassword  string `json:"DBSecurePassword"`
+    Port              int    `json:"Port" default:"8080"`
 }
 
 func main() {
-	cfg := &AppConfig{}
-	if err := sconfig.LoadConfig(cfg, 1, "config.json", false); err != nil {
-		panic(err)
-	}
-	fmt.Println("listening on", cfg.Port)
+    cfg := &AppConfig{}
+    if err := sconfig.LoadConfig(cfg, 1, "config.json", false); err != nil {
+        panic(err)
+    }
+    fmt.Println("listening on", cfg.Port)
 }
 ```
 
@@ -71,7 +71,7 @@ go build -ldflags "-X github.com/janmz/sconfig.Version=1.2.3 -X github.com/janmz
 
 This project is provided as donationware. If it helps you, please consider donating to CFI Kinderhilfe to support children in need:
 
-- Donate: https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG
+- Donate: [https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG](Donation page of CFI Kinderhilfe - in German!)
 
 ## Contributing
 
