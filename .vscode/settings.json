@@ -1,0 +1,20 @@
+{
+    "php.suggest.basic": true,
+    "php.validate.enable": true,
+    "php.validate.executablePath": "",
+    "[php]": {
+        "editor.defaultFormatter": "junstyle.php-cs-fixer",
+        "editor.formatOnSave": true
+    },
+    "php-cs-fixer.executablePath": "${workspaceFolder}/php/vendor/bin/php-cs-fixer",
+    "php-cs-fixer.config": "${workspaceFolder}/php/.php-cs-fixer.php",
+    "php-cs-fixer.onsave": true,
+    "phpcs.enable": true,
+    "phpcs.executablePath": "${workspaceFolder}/php/vendor/bin/phpcs",
+    "phpcs.standard": "${workspaceFolder}/php/phpcs.xml",
+    "phpcbf.enable": true,
+    "phpcbf.executablePath": "${workspaceFolder}/php/vendor/bin/phpcbf",
+    "phpcbf.standard": "${workspaceFolder}/php/phpcs.xml",
+    "phpcbf.onsave": false
+}
+
