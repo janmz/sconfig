@@ -197,28 +197,32 @@ class EnvLoader
     private static function processPasswords(array &$parsed): bool
     {
         $changed = false;
+        $markers = self::getPasswordMarkers();
 
         foreach ($parsed as $key => $value) {
-            // Check if this is a SecurePassword field
-            if (preg_match('/^(.+)_SECURE_PASSWORD$/i', $key, $matches)) {
+            // Check if this is a Password field (not SecurePassword)
+            if (preg_match('/^(.+)_PASSWORD$/i', $key, $matches) && 
+                !preg_match('/^(.+)_SECURE_PASSWORD$/i', $key)) {
                 $prefix = $matches[1];
-                $passwordKey = $prefix . '_PASSWORD';
+                $securePasswordKey = $prefix . '_SECURE_PASSWORD';
 
-                // Check if corresponding Password field exists
-                if (isset($parsed[$passwordKey])) {
-                    $passwordValue = $parsed[$passwordKey];
-
-                    // Check if password is plaintext (not the marker)
-                    $markers = self::getPasswordMarkers();
-                    if ($passwordValue !== $markers['en'] && 
-                        $passwordValue !== $markers['de'] &&
-                        $passwordValue !== '') {
-                        // Encrypt the password
-                        $encrypted = self::encrypt($passwordValue);
-                        $parsed[$key] = $encrypted;
-                        $parsed[$passwordKey] = self::getPasswordMarker();
-                        $changed = true;
+                // Check if password is plaintext (not the marker)
+                if ($value !== $markers['en'] && 
+                    $value !== $markers['de'] &&
+                    $value !== '') {
+                    // Encrypt the password
+                    $encrypted = self::encrypt($value);
+                    
+                    // Ensure SECURE_PASSWORD field exists (create if it doesn't)
+                    if (!isset($parsed[$securePasswordKey])) {
+                        $parsed[$securePasswordKey] = '';
                     }
+                    
+                    // Set encrypted value in SECURE_PASSWORD
+                    $parsed[$securePasswordKey] = $encrypted;
+                    // Replace plaintext with marker
+                    $parsed[$key] = self::getPasswordMarker();
+                    $changed = true;
                 }
             }
         }

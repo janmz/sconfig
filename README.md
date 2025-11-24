@@ -26,13 +26,7 @@ composer require janmz/sconfig
 
 #### Via Git Repository (development/current)
 
-If the package is not yet published on Packagist, you can install it directly from the Git repository:
-
-```bash
-composer require janmz/sconfig:dev-main --prefer-source
-```
-
-Or add to your `composer.json`:
+**Important:** Since the package is not yet published on Packagist, you must first add the repository to your `composer.json`:
 
 ```json
 {
@@ -51,6 +45,18 @@ Or add to your `composer.json`:
 Then run:
 ```bash
 composer install
+```
+
+**Alternative:** You can also use `composer require` with the repository flag:
+
+```bash
+composer require janmz/sconfig:dev-main --prefer-source --repository='{"type":"vcs","url":"https://github.com/janmz/sconfig"}'
+```
+
+However, it's recommended to add the repository to your `composer.json` first, then use:
+
+```bash
+composer require janmz/sconfig:dev-main --prefer-source
 ```
 
 ## Go Version

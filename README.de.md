@@ -24,13 +24,7 @@ composer require janmz/sconfig
 
 #### Via Git Repository (Entwicklung/Aktuell)
 
-Falls das Paket noch nicht auf Packagist veröffentlicht ist, kann es direkt aus dem Git-Repository installiert werden:
-
-```bash
-composer require janmz/sconfig:dev-main --prefer-source
-```
-
-Oder in deiner `composer.json` hinzufügen:
+**Wichtig:** Da das Paket noch nicht auf Packagist veröffentlicht ist, musst du zuerst das Repository in deiner `composer.json` hinzufügen:
 
 ```json
 {
@@ -49,6 +43,18 @@ Oder in deiner `composer.json` hinzufügen:
 Dann ausführen:
 ```bash
 composer install
+```
+
+**Alternative:** Du kannst auch `composer require` mit dem Repository-Flag verwenden:
+
+```bash
+composer require janmz/sconfig:dev-main --prefer-source --repository='{"type":"vcs","url":"https://github.com/janmz/sconfig"}'
+```
+
+Es wird jedoch empfohlen, das Repository zuerst in deiner `composer.json` hinzuzufügen, dann zu verwenden:
+
+```bash
+composer require janmz/sconfig:dev-main --prefer-source
 ```
 
 ## Go-Variante

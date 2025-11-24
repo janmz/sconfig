@@ -3,13 +3,12 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.1.10 (in version.go zu ändern)
-
-//ChangeLog:
-// 24.11.25	1.2.1	fixed wrong composer settings and documentation
+ * Version: 1.2.2.11 (in version.go zu ändern)
  *
- * Changelog:
- * 1.2.0  24.11.25 Included PHP variant
+ * ChangeLog:
+ *  24.11.25	1.2.2	fixed missing password replacements
+ * 24.11.25	1.2.1	fixed wrong composer settings and documentation
+ * 24.11.25	1.2.0	included PHP variant
  *
  * Author: Jan Neuhaus, VAYA Consulting, https://vaya-consultig.de/development/ https://github.com/janmz
  *
