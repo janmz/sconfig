@@ -3,7 +3,7 @@
 namespace Sconfig;
 
 /**
- * EnvLoader - Loads and manages environment variables from .env files with secure password handling
+ * Decription: Loads and manages environment variables from .env files with secure password handling
  *
  * This class provides functionality to load environment variables from a .env file,
  * automatically encrypt passwords, and make them accessible via the env() helper function.
@@ -17,6 +17,11 @@ namespace Sconfig;
  *
  * @package Sconfig
  * @author Jan Neuhaus, VAYA Consulting
+ * @version 1.1.0
+ *
+ * Changelog:
+ * 1.1.0 24.11.25 Initial build of the PHP variant of the sconfig library
+ * 
  */
 class EnvLoader
 {
