@@ -1,0 +1,20 @@
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=myapp
+DB_USER=root
+DB_PASSWORD=mysecretpassword123
+DB_SECURE_PASSWORD=
+
+# API Configuration
+API_KEY=your-api-key-here
+API_URL=https://api.example.com
+
+# Application Settings
+APP_ENV=development
+DEBUG=true
+
+# Example: Another password pair
+ADMIN_PASSWORD=admin123
+ADMIN_SECURE_PASSWORD=
+

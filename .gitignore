@@ -1,3 +1,5 @@
 /.i18n-config
 /i18n.github_action.txt
 /makefile
+*.syso
+*.bak

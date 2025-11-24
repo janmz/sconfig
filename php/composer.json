@@ -1,0 +1,30 @@
+{
+    "name": "janmz/sconfig-php",
+    "description": "PHP library for loading and managing .env configuration files with secure password handling",
+    "type": "library",
+    "keywords": ["config", "env", "environment", "password", "encryption", "security"],
+    "license": "MIT",
+    "homepage": "https://github.com/janmz/sconfig",
+    "authors": [
+        {
+            "name": "Jan Neuhaus",
+            "email": "jan@vaya-consulting.de",
+            "homepage": "https://vaya-consulting.de/"
+        }
+    ],
+    "require": {
+        "php": ">=7.4",
+        "ext-openssl": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Sconfig\\": "src/"
+        },
+        "files": [
+            "src/helpers.php"
+        ]
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
+
