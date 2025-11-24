@@ -1,9 +1,12 @@
 package sconfig
 
 /*
- * This package contains a function for managing config files with secure passwords.
+ * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version 1.0
+ * Version 1.0.0
+
+ * Changelog:
+ * 1.2.0  24.11.25 Included PHP variant
  *
  * Author: Jan Neuhaus, VAYA Consulting, https://vaya-consultig.de/development/ https://github.com/janmz
  *
@@ -436,3 +439,6 @@ func decrypt(text string) (string, error) {
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	return string(plaintext), err
 }
+
+//ChangeLog:
+// 24.11.25	1.2.0	Included reference to php variant
