@@ -1,6 +1,7 @@
 <?php
 
 if (!function_exists('env')) {
+    
     /**
      * Get an environment variable value
      *
