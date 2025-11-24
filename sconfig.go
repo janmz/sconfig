@@ -3,8 +3,8 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version 1.0.0
-
+ * Version: 1.2.0.9 (in version.go zu ändern)
+ *
  * Changelog:
  * 1.2.0  24.11.25 Included PHP variant
  *

@@ -4,9 +4,11 @@
  * Example usage of sconfig-php with password encryption
  */
 
+use Sconfig\EnvLoader;
+use Sconfig\I18n;
+
 require_once __DIR__ . '/vendor/autoload.php';
 
-use Sconfig\EnvLoader;
 
 // Load .env file from current directory
 // Note: Rename 'example_env' to '.env' before running
@@ -46,8 +48,6 @@ echo "\nNote: If DB_PASSWORD contained a plaintext password, it has been encrypt
 echo "and stored in DB_SECURE_PASSWORD. The .env file has been updated.\n";
 
 // Example: Using i18n
-use Sconfig\I18n;
-
 echo "\n--- Internationalization Example ---\n";
 echo "Current language: " . I18n::getCurrentLanguage() . "\n";
 echo "Password marker: " . I18n::t('config.password_message') . "\n";
