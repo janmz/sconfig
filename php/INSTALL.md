@@ -5,7 +5,7 @@
 Once the package is published on [Packagist](https://packagist.org/):
 
 ```bash
-composer require janmz/sconfig-php
+composer require janmz/sconfig
 ```
 
 ## Option 2: Via Git Repository
@@ -13,7 +13,7 @@ composer require janmz/sconfig-php
 ### Direct Installation
 
 ```bash
-composer require janmz/sconfig-php:dev-main --prefer-source
+composer require janmz/sconfig:dev-main --prefer-source
 ```
 
 ### Manual Installation via composer.json
@@ -29,7 +29,7 @@ Add to your `composer.json`:
         }
     ],
     "require": {
-        "janmz/sconfig-php": "*"
+        "janmz/sconfig": "*"
     }
 }
 ```
@@ -45,7 +45,7 @@ Or if using the Git repository directly:
         }
     ],
     "require": {
-        "janmz/sconfig-php": "dev-main"
+        "janmz/sconfig": "dev-main"
     }
 }
 ```
@@ -63,14 +63,14 @@ For local development, you can use a path repository:
         }
     ],
     "require": {
-        "janmz/sconfig-php": "*"
+        "janmz/sconfig": "*"
     }
 }
 ```
 
 ## Publishing to Packagist
 
-To make the package available via `composer require janmz/sconfig-php`:
+To make the package available via `composer require janmz/sconfig`:
 
 ### Option A: Using Root composer.json (Recommended)
 
@@ -85,7 +85,7 @@ This repository includes a `composer.json` in the root directory that points to 
 
 If you prefer to keep the PHP package completely separate:
 
-1. Create a new repository (e.g., `janmz/sconfig-php`)
+1. Create a new repository (e.g., `janmz/sconfig-php` - note: this is no longer recommended, use the unified `janmz/sconfig` package instead)
 2. Copy the contents of the `php/` directory to the new repository root
 3. Submit to Packagist with the new repository URL
 

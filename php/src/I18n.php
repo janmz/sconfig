@@ -3,7 +3,7 @@
 namespace Sconfig;
 
 /**
- * I18n - Internationalization support for sconfig-php
+ * I18n - Internationalization support for sconfig (PHP)
  *
  * Loads translations from the locales/ directory and provides
  * translation functionality similar to the Go version.

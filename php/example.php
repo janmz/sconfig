@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Example usage of sconfig-php with password encryption
+ * Example usage of sconfig (PHP) with password encryption
  */
 
 use Sconfig\EnvLoader;

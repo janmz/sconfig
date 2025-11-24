@@ -1,4 +1,4 @@
-# sconfig-php
+# sconfig (PHP)
 
 PHP library for loading and managing `.env` configuration files with secure password handling. This is the PHP variant of the [sconfig](https://github.com/janmz/sconfig) Go library.
 
@@ -7,7 +7,7 @@ PHP library for loading and managing `.env` configuration files with secure pass
 ### Via Packagist (when published)
 
 ```bash
-composer require janmz/sconfig-php
+composer require janmz/sconfig
 ```
 
 ### Via Git Repository (development/current)
@@ -15,7 +15,7 @@ composer require janmz/sconfig-php
 If the package is not yet published on Packagist, you can install it directly from the Git repository:
 
 ```bash
-composer require janmz/sconfig-php:dev-main --prefer-source
+composer require janmz/sconfig:dev-main --prefer-source
 ```
 
 Or add to your `composer.json`:
@@ -29,7 +29,7 @@ Or add to your `composer.json`:
         }
     ],
     "require": {
-        "janmz/sconfig-php": "dev-main"
+        "janmz/sconfig": "dev-main"
     }
 }
 ```

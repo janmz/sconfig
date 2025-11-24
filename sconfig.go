@@ -3,7 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.0.9 (in version.go zu ändern)
+ * Version: 1.2.1.10 (in version.go zu ändern)
+
+//ChangeLog:
+// 24.11.25	1.2.1	fixed wrong composer settings and documentation
  *
  * Changelog:
  * 1.2.0  24.11.25 Included PHP variant
@@ -439,6 +442,3 @@ func decrypt(text string) (string, error) {
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	return string(plaintext), err
 }
-
-//ChangeLog:
-// 24.11.25	1.2.0	Included reference to php variant

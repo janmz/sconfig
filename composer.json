@@ -1,5 +1,5 @@
 {
-    "name": "janmz/sconfig-php",
+    "name": "janmz/sconfig",
     "description": "PHP library for loading and managing .env configuration files with secure password handling",
     "type": "library",
     "keywords": ["config", "env", "environment", "password", "encryption", "security"],
