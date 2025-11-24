@@ -294,10 +294,9 @@ class EnvLoader
             mt_srand($hardwareId);
             $key = '';
             for ($i = 0; $i < 32; $i++) {
-                // Simulate Int63() >> 16 & 0xff
-                // mt_rand() returns 32-bit, so we combine two calls for more entropy
-                $val = (mt_rand() << 16) | mt_rand();
-                $key .= chr(($val >> 16) & 0xff);
+                // Simulate Int63() >> 16 & 0xff using xor-operator for entropy
+                $val = mt_rand() ^ mt_rand();
+                $key .= chr($val & 0xff);
             }
             self::$encryptionKey = $key;
         } catch (\Exception $e) {
@@ -388,11 +387,6 @@ class EnvLoader
         $result = 0;
         for ($i = 0; $i < 8; $i++) {
             $result = ($result << 8) | ord($hash[$i]);
-        }
-
-        // Convert to signed 64-bit if needed (PHP doesn't have uint64)
-        if ($result > PHP_INT_MAX) {
-            $result = $result - (1 << 63) * 2;
         }
 
         return (int)$result;
