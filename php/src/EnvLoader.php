@@ -26,12 +26,39 @@ namespace Sconfig;
 class EnvLoader
 {
     /**
-     * Marker string that indicates a password is encrypted
-     * English: "Enter new password here"
-     * German: "Hier neues Passwort eintragen"
+     * Get the password marker string for the current language
+     *
+     * @return string Marker string indicating password is encrypted
      */
-    private const PASSWORD_IS_SECURE_EN = "Enter new password here";
-    private const PASSWORD_IS_SECURE_DE = "Hier neues Passwort eintragen";
+    private static function getPasswordMarker(): string
+    {
+        I18n::initialize();
+        return I18n::t('config.password_message');
+    }
+
+    /**
+     * Get password marker strings for both languages (for comparison)
+     *
+     * @return array<string> Array with 'en' and 'de' markers
+     */
+    private static function getPasswordMarkers(): array
+    {
+        I18n::initialize();
+        $currentLang = I18n::getCurrentLanguage();
+        
+        // Get English marker
+        I18n::setLanguage('en');
+        $enMarker = I18n::t('config.password_message');
+        
+        // Get German marker
+        I18n::setLanguage('de');
+        $deMarker = I18n::t('config.password_message');
+        
+        // Restore original language
+        I18n::setLanguage($currentLang);
+        
+        return ['en' => $enMarker, 'de' => $deMarker];
+    }
 
     /**
      * @var array<string, string> Cache of loaded environment variables
@@ -69,6 +96,9 @@ class EnvLoader
      */
     public static function load(string $filePath, bool $override = false, bool $cleanConfig = false): void
     {
+        // Initialize i18n first
+        I18n::initialize();
+        
         self::initializeEncryption();
 
         self::$filePath = $filePath;
@@ -80,12 +110,12 @@ class EnvLoader
         }
 
         if (!is_readable($filePath)) {
-            throw new \RuntimeException("Environment file is not readable: {$filePath}");
+            throw new \RuntimeException(I18n::t('config.read_failed', $filePath));
         }
 
         $lines = file($filePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         if ($lines === false) {
-            throw new \RuntimeException("Failed to read environment file: {$filePath}");
+            throw new \RuntimeException(I18n::t('config.read_failed', $filePath));
         }
 
         // Parse all lines into key-value pairs, preserving comments and structure
@@ -179,13 +209,14 @@ class EnvLoader
                     $passwordValue = $parsed[$passwordKey];
 
                     // Check if password is plaintext (not the marker)
-                    if ($passwordValue !== self::PASSWORD_IS_SECURE_EN && 
-                        $passwordValue !== self::PASSWORD_IS_SECURE_DE &&
+                    $markers = self::getPasswordMarkers();
+                    if ($passwordValue !== $markers['en'] && 
+                        $passwordValue !== $markers['de'] &&
                         $passwordValue !== '') {
                         // Encrypt the password
                         $encrypted = self::encrypt($passwordValue);
                         $parsed[$key] = $encrypted;
-                        $parsed[$passwordKey] = self::PASSWORD_IS_SECURE_EN;
+                        $parsed[$passwordKey] = self::getPasswordMarker();
                         $changed = true;
                     }
                 }
@@ -217,6 +248,9 @@ class EnvLoader
                     } catch (\Exception $e) {
                         // If decryption fails, keep the secure password value
                         // This might happen if the file was moved to a different machine
+                        I18n::initialize();
+                        $prefix = preg_replace('/_SECURE_PASSWORD$/i', '', $key);
+                        throw new \RuntimeException(I18n::t('config.decrypt_failed', $prefix) . ': ' . $e->getMessage());
                     }
                 }
             }
@@ -405,8 +439,10 @@ class EnvLoader
      */
     private static function encrypt(string $text): string
     {
+        I18n::initialize();
+        
         if (self::$encryptionKey === null) {
-            throw new \RuntimeException("Encryption not initialized");
+            throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
         }
 
         $method = 'aes-256-gcm';
@@ -417,7 +453,7 @@ class EnvLoader
         $encrypted = openssl_encrypt($text, $method, self::$encryptionKey, OPENSSL_RAW_DATA, $iv, $tag);
         
         if ($encrypted === false) {
-            throw new \RuntimeException("Encryption failed");
+            throw new \RuntimeException(I18n::t('config.failed_checking', 'encryption'));
         }
 
         // Combine IV, tag, and ciphertext
@@ -434,13 +470,15 @@ class EnvLoader
      */
     private static function decrypt(string $encryptedText): string
     {
+        I18n::initialize();
+        
         if (self::$encryptionKey === null) {
-            throw new \RuntimeException("Encryption not initialized");
+            throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
         }
 
         $data = base64_decode($encryptedText, true);
         if ($data === false) {
-            throw new \RuntimeException("Invalid base64 data");
+            throw new \RuntimeException(I18n::t('config.failed_parsing', 'base64 data'));
         }
 
         $method = 'aes-256-gcm';
@@ -448,7 +486,7 @@ class EnvLoader
         $tagLength = 16; // GCM tag is always 16 bytes
 
         if (strlen($data) < $ivLength + $tagLength) {
-            throw new \RuntimeException("Invalid encrypted data");
+            throw new \RuntimeException(I18n::t('config.failed_parsing', 'encrypted data'));
         }
 
         $iv = substr($data, 0, $ivLength);
@@ -458,7 +496,7 @@ class EnvLoader
         $decrypted = openssl_decrypt($ciphertext, $method, self::$encryptionKey, OPENSSL_RAW_DATA, $iv, $tag);
         
         if ($decrypted === false) {
-            throw new \RuntimeException("Decryption failed");
+            throw new \RuntimeException(I18n::t('config.decrypt_failed', '', 'decryption'));
         }
 
         return $decrypted;

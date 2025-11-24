@@ -179,12 +179,14 @@ DEBUG=false
 
 - Simple and lightweight
 - **Automatic password encryption/decryption** with hardware-bound keys
+- **Multilingual support** (English, German) with automatic language detection
 - Automatic caching of loaded values
 - Support for default values
 - Integration with PHP's native `$_ENV` and `getenv()`
 - PSR-4 autoloading
 - No external dependencies (PHP 7.4+)
 - AES-256-GCM encryption for secure password storage
+- Translations loaded from `locales/` directory (same as Go version)
 
 ## API Reference
 
@@ -224,6 +226,28 @@ Clear the cache and reset loaded state.
 ### EnvLoader::isLoaded(): bool
 
 Check if environment has been loaded.
+
+## Internationalization
+
+The library supports multiple languages and automatically detects the system language from environment variables (`LANG`, `LC_ALL`, `LC_MESSAGES`). Translations are loaded from the `locales/` directory (same JSON files as the Go version).
+
+Supported languages:
+- English (en) - default/fallback
+- German (de)
+
+You can manually set the language:
+
+```php
+use Sconfig\I18n;
+
+I18n::setLanguage('de'); // Switch to German
+$message = I18n::t('config.password_message'); // Get translated message
+```
+
+The library automatically finds the `locales/` directory by searching:
+1. Parent directory of the PHP package (`../locales`)
+2. Project root (`./locales`)
+3. Current working directory (`./locales`)
 
 ## Security Notes
 
