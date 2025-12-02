@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.2.11 (in version.go zu ändern)
+ * Version: 1.2.3.12 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  02.12.25	1.2.3	fix: using volatile information on VM has voided the hardware id
  *  24.11.25	1.2.2	fixed missing password replacements
  * 24.11.25	1.2.1	fixed wrong composer settings and documentation
  * 24.11.25	1.2.0	included PHP variant
@@ -57,14 +58,96 @@ var encryptionKey []byte
 var initialized = false
 
 /*
+ * Check if the system is running on a virtual machine
+ * Uses multiple detection methods for reliability
+ */
+func isVirtualMachine() bool {
+	if runtime.GOOS == "windows" {
+		// Windows VM detection using WMI
+		out, err := exec.Command("wmic", "computersystem", "get", "Manufacturer,Model", "/value").Output()
+		if err == nil {
+			manufacturer := ""
+			model := ""
+			lines := strings.Split(string(out), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "Manufacturer=") {
+					manufacturer = strings.ToLower(strings.TrimSpace(line[13:]))
+				} else if strings.HasPrefix(line, "Model=") {
+					model = strings.ToLower(strings.TrimSpace(line[6:]))
+				}
+			}
+
+			vmIndicators := []string{
+				"vmware", "virtualbox", "microsoft corporation", "xen",
+				"parallels", "qemu", "kvm", "innotek", "bochs",
+			}
+
+			for _, indicator := range vmIndicators {
+				if strings.Contains(manufacturer, indicator) || strings.Contains(model, indicator) {
+					return true
+				}
+			}
+
+			// Check for Hyper-V (Virtual Machine in Model)
+			if strings.Contains(model, "virtual") {
+				return true
+			}
+		}
+		return false
+	}
+
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
+	// Method 1: systemd-detect-virt (most reliable)
+	out, err := exec.Command("systemd-detect-virt").Output()
+	if err == nil {
+		virt := strings.TrimSpace(string(out))
+		// Returns "none" on bare metal, or VM type (kvm, vmware, qemu, etc.)
+		if virt != "none" && virt != "" {
+			return true
+		}
+	}
+
+	// Method 2: Check DMI vendor/product
+	checks := []string{
+		"/sys/class/dmi/id/sys_vendor",
+		"/sys/class/dmi/id/product_name",
+		"/sys/class/dmi/id/chassis_vendor",
+	}
+
+	vmIndicators := []string{
+		"qemu", "kvm", "vmware", "virtualbox", "xen",
+		"parallels", "microsoft", "bochs", "bhyve",
+	}
+
+	for _, file := range checks {
+		content, err := os.ReadFile(file)
+		if err == nil {
+			contentStr := strings.ToLower(strings.TrimSpace(string(content)))
+			for _, indicator := range vmIndicators {
+				if strings.Contains(contentStr, indicator) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+/*
  * This function is a default function that can be overridden and generates a 64-bit number
  * that uniquely identifies a system in such a way that it is unlikely that someone can simply build
  * a second system that gets the identical ID. This allows system-specific keys to be generated
  * that are used for encrypting passwords in config files.
+ * On virtual machines, prioritizes stable identifiers like machine-id and product_uuid.
  *
  */
 func secure_config_getHardwareID() (uint64, error) {
 	var identifiers []string
+	isVM := isVirtualMachine()
 
 	// MAC address of the first network card
 	interfaces, err := net.Interfaces()
@@ -80,12 +163,55 @@ func secure_config_getHardwareID() (uint64, error) {
 	// CPU ID and other hardware information depending on the operating system
 	switch runtime.GOOS {
 	case "windows":
+		if isVM {
+			// For Windows VMs: prioritize stable identifiers
+			// 1. MachineGuid from Registry (very stable on Windows)
+			out, err := exec.Command("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid").Output()
+			if err == nil {
+				lines := strings.Split(string(out), "\n")
+				for _, line := range lines {
+					if strings.Contains(line, "MachineGuid") {
+						parts := strings.Fields(line)
+						for i, part := range parts {
+							if part == "REG_SZ" && i+1 < len(parts) {
+								machineGuid := strings.TrimSpace(parts[i+1])
+								if machineGuid != "" {
+									identifiers = append(identifiers, machineGuid)
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// 2. SMBIOS UUID (usually stable on VMs)
+			out, err = exec.Command("wmic", "csproduct", "get", "UUID", "/value").Output()
+			if err == nil {
+				lines := strings.Split(string(out), "\n")
+				for _, line := range lines {
+					if strings.HasPrefix(line, "UUID=") {
+						uuid := strings.TrimSpace(line[5:])
+						if uuid != "" {
+							identifiers = append(identifiers, uuid)
+							break
+						}
+					}
+				}
+			}
+		}
+
+		// Common identifiers (for both VM and physical)
 		// Windows-specific hardware IDs
 		cmds := []string{
-			"wmic cpu get ProcessorId",
 			"wmic baseboard get SerialNumber",
 			"wmic baseboard get Product",
 			"wmic diskdrive get SerialNumber",
+		}
+
+		// On VMs, skip CPU ProcessorId as it's often unreliable
+		if !isVM {
+			cmds = append([]string{"wmic cpu get ProcessorId"}, cmds...)
 		}
 
 		for _, cmd := range cmds {
@@ -103,11 +229,35 @@ func secure_config_getHardwareID() (uint64, error) {
 		}
 
 	case "linux":
-		// Linux-specific hardware IDs
+		if isVM {
+			// For VMs: prioritize stable identifiers
+			// 1. machine-id (very stable on VMs)
+			machineId, err := os.ReadFile("/etc/machine-id")
+			if err == nil {
+				machineIdStr := strings.TrimSpace(string(machineId))
+				if machineIdStr != "" {
+					identifiers = append(identifiers, machineIdStr)
+				}
+			}
+
+			// 2. product_uuid (usually stable on VMs)
+			productUuid, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
+			if err == nil {
+				productUuidStr := strings.TrimSpace(string(productUuid))
+				if productUuidStr != "" {
+					identifiers = append(identifiers, productUuidStr)
+				}
+			}
+		}
+
+		// Common identifiers (for both VM and physical)
 		cmds := []string{
-			"cat /proc/cpuinfo | grep 'Serial'",
-			"cat /sys/class/dmi/id/product_uuid",
 			"cat /sys/class/dmi/id/board_serial",
+		}
+
+		// Only add CPU serial if not on VM (often unreliable on VMs)
+		if !isVM {
+			cmds = append(cmds, "cat /proc/cpuinfo | grep 'Serial'")
 		}
 
 		for _, cmd := range cmds {

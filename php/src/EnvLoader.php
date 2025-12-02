@@ -350,7 +350,92 @@ class EnvLoader
     }
 
     /**
+     * Check if the system is running on a virtual machine
+     * Uses multiple detection methods for reliability
+     *
+     * @return bool True if running on a VM, false otherwise
+     */
+    private static function isVirtualMachine(): bool
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Windows VM detection using WMI
+            $output = @shell_exec('wmic computersystem get Manufacturer,Model /value 2>nul');
+            if ($output) {
+                $manufacturer = '';
+                $model = '';
+                $lines = explode("\n", $output);
+                foreach ($lines as $line) {
+                    if (strpos($line, 'Manufacturer=') === 0) {
+                        $manufacturer = strtolower(trim(substr($line, 13)));
+                    } elseif (strpos($line, 'Model=') === 0) {
+                        $model = strtolower(trim(substr($line, 6)));
+                    }
+                }
+                
+                $vmIndicators = [
+                    'vmware', 'virtualbox', 'microsoft corporation', 'xen',
+                    'parallels', 'qemu', 'kvm', 'innotek', 'bochs'
+                ];
+                
+                foreach ($vmIndicators as $indicator) {
+                    if (strpos($manufacturer, $indicator) !== false || 
+                        strpos($model, $indicator) !== false) {
+                        return true;
+                    }
+                }
+                
+                // Check for Hyper-V (Virtual Machine in Model)
+                if (strpos($model, 'virtual') !== false) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if (PHP_OS_FAMILY !== 'Linux') {
+            return false;
+        }
+
+        // Method 1: systemd-detect-virt (most reliable)
+        $output = @shell_exec('systemd-detect-virt 2>/dev/null');
+        if ($output) {
+            $virt = trim($output);
+            // Returns "none" on bare metal, or VM type (kvm, vmware, qemu, etc.)
+            if ($virt !== 'none' && $virt !== '') {
+                return true;
+            }
+        }
+
+        // Method 2: Check DMI vendor/product
+        $checks = [
+            '/sys/class/dmi/id/sys_vendor',
+            '/sys/class/dmi/id/product_name',
+            '/sys/class/dmi/id/chassis_vendor',
+        ];
+
+        $vmIndicators = [
+            'qemu', 'kvm', 'vmware', 'virtualbox', 'xen',
+            'parallels', 'microsoft', 'bochs', 'bhyve'
+        ];
+
+        foreach ($checks as $file) {
+            $content = @file_get_contents($file);
+            if ($content) {
+                $content = strtolower(trim($content));
+                foreach ($vmIndicators as $indicator) {
+                    if (strpos($content, $indicator) !== false) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Get hardware ID for encryption key generation
+     * On virtual machines, prioritizes stable identifiers like machine-id and product_uuid
      *
      * @return int 64-bit hardware identifier
      * @throws \RuntimeException If hardware ID cannot be determined
@@ -358,9 +443,46 @@ class EnvLoader
     private static function getHardwareID(): int
     {
         $identifiers = [];
+        $isVM = self::isVirtualMachine();
 
         // Try to get MAC address
         if (PHP_OS_FAMILY === 'Windows') {
+            if ($isVM) {
+                // For Windows VMs: prioritize stable identifiers
+                // 1. MachineGuid from Registry (very stable on Windows)
+                $output = @shell_exec('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid 2>nul');
+                if ($output) {
+                    // Parse: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography
+                    //     MachineGuid    REG_SZ    {GUID}
+                    $lines = explode("\n", $output);
+                    foreach ($lines as $line) {
+                        if (preg_match('/MachineGuid\s+REG_SZ\s+(.+)/i', $line, $matches)) {
+                            $machineGuid = trim($matches[1]);
+                            if (!empty($machineGuid)) {
+                                $identifiers[] = $machineGuid;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // 2. SMBIOS UUID (usually stable on VMs)
+                $output = @shell_exec('wmic csproduct get UUID /value 2>nul');
+                if ($output) {
+                    $lines = explode("\n", trim($output));
+                    foreach ($lines as $line) {
+                        if (strpos($line, 'UUID=') === 0) {
+                            $uuid = trim(substr($line, 5));
+                            if (!empty($uuid)) {
+                                $identifiers[] = $uuid;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Common identifiers (for both VM and physical)
             $output = @shell_exec('getmac /fo csv /nh 2>nul');
             if ($output) {
                 $lines = explode("\n", trim($output));
@@ -373,12 +495,17 @@ class EnvLoader
             }
 
             // Try Windows-specific hardware IDs
+            // On VMs, skip CPU ProcessorId as it's often unreliable
             $commands = [
-                'wmic cpu get ProcessorId /value',
                 'wmic baseboard get SerialNumber /value',
                 'wmic baseboard get Product /value',
                 'wmic diskdrive get SerialNumber /value',
             ];
+            
+            if (!$isVM) {
+                // Only use CPU ProcessorId on physical machines
+                $commands[] = 'wmic cpu get ProcessorId /value';
+            }
 
             foreach ($commands as $cmd) {
                 $output = @shell_exec($cmd . ' 2>nul');
@@ -398,12 +525,31 @@ class EnvLoader
             }
         } else {
             // Linux/Unix
+            if ($isVM) {
+                // For VMs: prioritize stable identifiers
+                // 1. machine-id (very stable on VMs)
+                $machineId = @file_get_contents('/etc/machine-id');
+                if ($machineId && trim($machineId) !== '') {
+                    $identifiers[] = trim($machineId);
+                }
+                
+                // 2. product_uuid (usually stable on VMs)
+                $productUuid = @file_get_contents('/sys/class/dmi/id/product_uuid');
+                if ($productUuid && trim($productUuid) !== '') {
+                    $identifiers[] = trim($productUuid);
+                }
+            }
+
+            // Common identifiers (for both VM and physical)
             $commands = [
                 "cat /sys/class/net/*/address 2>/dev/null | head -1",
-                "cat /proc/cpuinfo | grep 'Serial' | head -1",
-                "cat /sys/class/dmi/id/product_uuid 2>/dev/null",
                 "cat /sys/class/dmi/id/board_serial 2>/dev/null",
             ];
+
+            // Only add CPU serial if not on VM (often unreliable on VMs)
+            if (!$isVM) {
+                $commands[] = "cat /proc/cpuinfo | grep 'Serial' | head -1";
+            }
 
             foreach ($commands as $cmd) {
                 $output = @shell_exec($cmd);
