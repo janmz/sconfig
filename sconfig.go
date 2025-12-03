@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.7.16 (in version.go zu ändern)
+ * Version: 1.2.8.17 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  03.12.25	1.2.8	fix: use biggesr disk id
  *  03.12.25	1.2.7	fix: use biggesr disk id
  *  03.12.25	1.2.6	fix: use ipconfig for mac address
  *  03.12.25	1.2.5	fix: use route table for mac address
@@ -743,8 +744,18 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		return 0, fmt.Errorf("no hardware identifiers found")
 	}
 
+	// Sort identifiers to ensure consistent ordering regardless of collection order
+	// This is critical because the order affects the hash
+	for i := 0; i < len(identifiers)-1; i++ {
+		for j := i + 1; j < len(identifiers); j++ {
+			if identifiers[i] > identifiers[j] {
+				identifiers[i], identifiers[j] = identifiers[j], identifiers[i]
+			}
+		}
+	}
+
 	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware identifiers found: %d\n", len(identifiers))
+		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware identifiers found: %d (sorted)\n", len(identifiers))
 		for i, id := range identifiers {
 			fmt.Fprintf(os.Stderr, "[sconfig DEBUG]   Identifier %d: %s\n", i+1, id)
 		}
