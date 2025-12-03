@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.6.15 (in version.go zu ändern)
+ * Version: 1.2.7.16 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  03.12.25	1.2.7	fix: use biggesr disk id
  *  03.12.25	1.2.6	fix: use ipconfig for mac address
  *  03.12.25	1.2.5	fix: use route table for mac address
  *  02.12.25	1.2.3	fix: using volatile information on VM has voided the hardware id
@@ -546,7 +547,14 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 					if strings.HasPrefix(line, "UUID=") {
 						uuid := strings.TrimSpace(line[5:])
 						if uuid != "" {
+							// Normalize UUID: replace underscores with hyphens for consistency
+							uuid = strings.ReplaceAll(uuid, "_", "-")
+							// Remove trailing dots or other characters
+							uuid = strings.TrimRight(uuid, ".! ")
 							identifiers = append(identifiers, uuid)
+							if debugOutput {
+								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] SMBIOS UUID (normalized): %s\n", uuid)
+							}
 							break
 						}
 					}
@@ -557,9 +565,29 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		// Common identifiers (for both VM and physical)
 		// Windows-specific hardware IDs
 		// Baseboard and Product (usually single values)
-		cmds := []string{
-			"wmic baseboard get SerialNumber",
-			"wmic baseboard get Product",
+		// Parse them separately to handle empty values and ensure stability
+		baseboardCmds := []struct {
+			cmd  string
+			name string
+		}{
+			{"wmic baseboard get SerialNumber", "Baseboard SerialNumber"},
+			{"wmic baseboard get Product", "Baseboard Product"},
+		}
+
+		for _, cmdInfo := range baseboardCmds {
+			out, err := exec.Command("cmd", "/C", cmdInfo.cmd).Output()
+			if err == nil {
+				lines := strings.Split(string(out), "\n")
+				if len(lines) > 1 {
+					value := strings.TrimSpace(lines[1])
+					if value != "" && value != cmdInfo.name {
+						identifiers = append(identifiers, value)
+						if debugOutput {
+							fmt.Fprintf(os.Stderr, "[sconfig DEBUG] %s: %s\n", cmdInfo.name, value)
+						}
+					}
+				}
+			}
 		}
 
 		// Handle diskdrive SerialNumber separately to ensure stable ordering
@@ -580,7 +608,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 			if len(diskSerials) > 0 {
 				for i := 0; i < len(diskSerials)-1; i++ {
 					for j := i + 1; j < len(diskSerials); j++ {
-						if diskSerials[i] > diskSerials[j] {
+						if diskSerials[i] < diskSerials[j] {
 							diskSerials[i], diskSerials[j] = diskSerials[j], diskSerials[i]
 						}
 					}
@@ -620,20 +648,6 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 					identifiers = append(identifiers, cpuIds[0])
 					if debugOutput {
 						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] CPU ProcessorIds found: %d, using first (sorted): %s\n", len(cpuIds), cpuIds[0])
-					}
-				}
-			}
-		}
-
-		for _, cmd := range cmds {
-			out, err := exec.Command("cmd", "/C", cmd).Output()
-			if err == nil {
-				lines := strings.Split(string(out), "\n")
-				if len(lines) > 1 {
-					// First line is the header, second line contains the value
-					value := strings.TrimSpace(lines[1])
-					if value != "" {
-						identifiers = append(identifiers, value)
 					}
 				}
 			}
