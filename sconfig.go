@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.5.14 (in version.go zu ändern)
+ * Version: 1.2.6.15 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  03.12.25	1.2.6	fix: use ipconfig for mac address
  *  03.12.25	1.2.5	fix: use route table for mac address
  *  02.12.25	1.2.3	fix: using volatile information on VM has voided the hardware id
  *  24.11.25	1.2.2	fixed missing password replacements
@@ -162,7 +163,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 					break
 				}
 			}
-			
+
 			if interfaceIndex != "" {
 				// Now find the interface name by index using "netsh interface show interface"
 				out2, err2 := exec.Command("cmd", "/C", "netsh interface show interface").Output()
@@ -177,7 +178,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 						}
 					}
 				}
-				
+
 				// Alternative: use wmic to get interface name by index
 				cmd := fmt.Sprintf("wmic path Win32_NetworkAdapter where \"InterfaceIndex=%s\" get Name", interfaceIndex)
 				out3, err3 := exec.Command("cmd", "/C", cmd).Output()
@@ -195,7 +196,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 				}
 			}
 		}
-		
+
 		// Fallback: use ipconfig to find the adapter with default gateway
 		out, err = exec.Command("cmd", "/C", "ipconfig").Output()
 		if err == nil {
@@ -299,10 +300,10 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] sconfig BuildTime: %s\n", BuildTime)
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] ========================================\n")
 	}
-	
+
 	var identifiers []string
 	isVM := isVirtualMachine()
-	
+
 	if debugOutput {
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] VM detection: %v\n", isVM)
 	}
@@ -312,92 +313,92 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 	interfaces, err := net.Interfaces()
 	if err == nil && len(interfaces) > 0 {
 		var macAddress string
-		
+
 		// Try to find MAC address of the active interface by interface index
 		switch runtime.GOOS {
 		case "windows":
-			// On Windows, get the interface index from the route table
-			// We need to find the route with the lowest metric (most preferred route)
-			out, err := exec.Command("cmd", "/C", "route print 0.0.0.0").Output()
+			// On Windows, use ipconfig /all to find the adapter with default gateway
+			// This is more reliable than parsing route tables with varying formats
+			if debugOutput {
+				fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Using ipconfig /all to find active adapter\n")
+			}
+			out, err := exec.Command("cmd", "/C", "ipconfig /all").Output()
 			if err == nil {
 				output := string(out)
 				lines := strings.Split(output, "\n")
-				var bestInterfaceIndex string
-				var bestMetric int = 999999
-				// Look for all active route lines (0.0.0.0 with gateway) and find the one with lowest metric
-				for _, line := range lines {
+				var currentAdapterName string
+				var hasGateway bool
+				var adapterMAC string
+				var bestAdapterMAC string
+				var bestAdapterName string
+
+				for i, line := range lines {
 					line = strings.TrimSpace(line)
-					fields := strings.Fields(line)
-					// Format: "0.0.0.0 0.0.0.0 <gateway> <gateway> <metric> <interface_index>"
-					if len(fields) >= 6 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" && strings.Contains(fields[2], ".") {
-						// Parse metric (second to last field)
-						metric, err := strconv.Atoi(fields[len(fields)-2])
-						if err == nil && metric < bestMetric {
-							bestMetric = metric
-							bestInterfaceIndex = fields[len(fields)-1]
+
+					// Check for adapter name (ends with ":")
+					if strings.HasSuffix(line, ":") && !strings.Contains(line, "Windows IP") && !strings.Contains(line, "Configuration") {
+						// If previous adapter had gateway, save it as candidate
+						if hasGateway && currentAdapterName != "" && adapterMAC != "" {
+							bestAdapterMAC = adapterMAC
+							bestAdapterName = currentAdapterName
+							if debugOutput {
+								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found adapter with gateway: %s (MAC: %s)\n", currentAdapterName, adapterMAC)
+							}
+						}
+						// Start new adapter
+						currentAdapterName = strings.TrimSuffix(line, ":")
+						hasGateway = false
+						adapterMAC = ""
+					}
+
+					// Check for physical address (MAC)
+					if strings.HasPrefix(line, "Physical Address") || strings.HasPrefix(line, "Physische Adresse") || strings.HasPrefix(line, "Physikalische Adresse") {
+						parts := strings.Split(line, ":")
+						if len(parts) >= 2 {
+							adapterMAC = strings.TrimSpace(parts[1])
+							// Normalize MAC address format
+							adapterMAC = strings.ToLower(strings.ReplaceAll(adapterMAC, "-", ":"))
+						}
+					}
+
+					// Check for default gateway
+					if strings.HasPrefix(line, "Default Gateway") || strings.HasPrefix(line, "Standardgateway") {
+						// Check if it contains an IP address (has dots)
+						if strings.Contains(line, ".") || (strings.Contains(line, ":") && i < len(lines) && strings.Contains(lines[i+1], ".")) {
+							hasGateway = true
+							if debugOutput {
+								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Adapter %s has default gateway\n", currentAdapterName)
+							}
 						}
 					}
 				}
-				
-				if bestInterfaceIndex != "" {
-					interfaceIndex := bestInterfaceIndex
+
+				// Check last adapter
+				if hasGateway && currentAdapterName != "" && adapterMAC != "" {
+					bestAdapterMAC = adapterMAC
+					bestAdapterName = currentAdapterName
 					if debugOutput {
-						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found active route with interface index: %s (metric: %d)\n", interfaceIndex, bestMetric)
+						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Last adapter has gateway: %s (MAC: %s)\n", currentAdapterName, adapterMAC)
 					}
-					// Get MAC address directly from interface index using getmac
-					// getmac /fo csv /v gives us interface index and MAC address
-					out2, err2 := exec.Command("cmd", "/C", "getmac /fo csv /v /nh").Output()
-					if err2 == nil {
-						lines2 := strings.Split(string(out2), "\n")
-						for _, line := range lines2 {
-							// CSV format: "Connection Name","Network Adapter","Physical Address","Transport Name"
-							// We need to match by connection name or find another way
-							// Actually, let's use wmic to get MAC by interface index
-							if strings.Contains(line, interfaceIndex) {
-								// Parse CSV line
-								parts := strings.Split(line, ",")
-								if len(parts) >= 3 {
-									mac := strings.Trim(strings.TrimSpace(parts[2]), "\"")
-									if mac != "" && mac != "N/A" {
-										macAddress = mac
-										if debugOutput {
-											fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found MAC from getmac: %s\n", macAddress)
-										}
-										break
-									}
-								}
-							}
-						}
+				}
+
+				// Use the MAC address directly if found
+				if bestAdapterMAC != "" {
+					macAddress = bestAdapterMAC
+					if debugOutput {
+						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Using MAC address from active adapter '%s': %s\n", bestAdapterName, macAddress)
 					}
-					
-					// Alternative: use wmic to get MAC address by interface index
-					if macAddress == "" {
-						cmd := fmt.Sprintf("wmic path Win32_NetworkAdapter where \"InterfaceIndex=%s\" get MACAddress", interfaceIndex)
-						out3, err3 := exec.Command("cmd", "/C", cmd).Output()
-						if err3 == nil {
-							lines3 := strings.Split(string(out3), "\n")
-							for _, line := range lines3 {
-								line = strings.TrimSpace(line)
-								if line != "" && line != "MACAddress" && !strings.HasPrefix(line, "---") {
-									macAddress = line
-									if debugOutput {
-										fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found MAC from wmic (index %s): %s\n", interfaceIndex, macAddress)
-									}
-									break
-								}
-							}
-						}
-					}
-					
-					// Fallback: match by interface index in net.Interfaces()
-					if macAddress == "" {
-						idx, _ := strconv.Atoi(interfaceIndex)
+				} else {
+					// Fallback: try to match adapter name with net.Interfaces()
+					if bestAdapterName != "" {
 						for _, iface := range interfaces {
-							if iface.Index == idx {
+							ifaceNameLower := strings.ToLower(iface.Name)
+							adapterNameLower := strings.ToLower(bestAdapterName)
+							if strings.Contains(adapterNameLower, ifaceNameLower) || strings.Contains(ifaceNameLower, adapterNameLower) {
 								if iface.HardwareAddr != nil && iface.HardwareAddr.String() != "" {
 									macAddress = iface.HardwareAddr.String()
 									if debugOutput {
-										fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found MAC from net.Interfaces (index %d): %s\n", idx, macAddress)
+										fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Matched adapter name to interface, using MAC: %s\n", macAddress)
 									}
 									break
 								}
@@ -406,7 +407,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 					}
 				}
 			}
-			
+
 		case "linux":
 			// On Linux, get interface name from route, then find MAC
 			cmd := exec.Command("ip", "route", "get", "8.8.8.8")
@@ -441,7 +442,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 					}
 				}
 			}
-			
+
 		case "darwin":
 			// On macOS, get interface name from route, then find MAC
 			cmd := exec.Command("route", "-n", "get", "8.8.8.8")
@@ -475,7 +476,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 				}
 			}
 		}
-		
+
 		// Fallback: if we couldn't find the active interface, use the first available MAC address (sorted)
 		if macAddress == "" {
 			var macAddresses []string
@@ -499,7 +500,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 				}
 			}
 		}
-		
+
 		if macAddress != "" {
 			// Normalize MAC address: convert to lowercase and ensure consistent format
 			macAddress = strings.ToLower(strings.ReplaceAll(macAddress, "-", ":"))
@@ -560,7 +561,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 			"wmic baseboard get SerialNumber",
 			"wmic baseboard get Product",
 		}
-		
+
 		// Handle diskdrive SerialNumber separately to ensure stable ordering
 		out, err := exec.Command("cmd", "/C", "wmic diskdrive get SerialNumber").Output()
 		if err == nil {

@@ -45,7 +45,7 @@ func TestLoadConfig_Basic(ts *testing.T) {
 	ts.Run("Load with defaults", func(ts *testing.T) {
 		config := &TestConfig{}
 
-		err := LoadConfig(config, 1, configPath, false)
+		err := LoadConfig(config, 1, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -102,7 +102,7 @@ func TestLoadConfig_WithExistingFile(ts *testing.T) {
 	ts.Run("Load existing config", func(ts *testing.T) {
 		config := &TestConfig{}
 
-		err := LoadConfig(config, 6, configPath, false)
+		err := LoadConfig(config, 6, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -141,7 +141,7 @@ func TestLoadConfig_PasswordEncryption(ts *testing.T) {
 		}
 
 		// Load config - this should encrypt the passwords
-		err := LoadConfig(config, 1, configPath, false)
+		err := LoadConfig(config, 1, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -191,7 +191,7 @@ func TestLoadConfig_CleanConfig(ts *testing.T) {
 		}
 
 		// Load config with cleanConfig=true
-		err := LoadConfig(config, 1, configPath, true)
+		err := LoadConfig(config, 1, configPath, true, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -236,7 +236,7 @@ func TestLoadConfig_NestedStructures(ts *testing.T) {
 			},
 		}
 
-		err := LoadConfig(config, 2, configPath, false)
+		err := LoadConfig(config, 2, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -283,7 +283,7 @@ func TestLoadConfig_SliceStructures(ts *testing.T) {
 			},
 		}
 
-		err := LoadConfig(config, 3, configPath, false)
+		err := LoadConfig(config, 3, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -310,7 +310,7 @@ func TestLoadConfig_ErrorCases(ts *testing.T) {
 	ts.Run("Invalid config type (not a pointer to struct)", func(ts *testing.T) {
 		config := TestConfig{} // Not a pointer
 
-		err := LoadConfig(config, 1, filepath.Join(tempDir, "test.json"), false)
+		err := LoadConfig(config, 1, filepath.Join(tempDir, "test.json"), false, false)
 		if err == nil {
 			ts.Error("Expected error for non-pointer config, got nil")
 		}
@@ -322,7 +322,7 @@ func TestLoadConfig_ErrorCases(ts *testing.T) {
 	ts.Run("Invalid config type (not a struct)", func(ts *testing.T) {
 		config := "not a struct"
 
-		err := LoadConfig(&config, 1, filepath.Join(tempDir, "test.json"), false)
+		err := LoadConfig(&config, 1, filepath.Join(tempDir, "test.json"), false, false)
 		if err == nil {
 			ts.Error("Expected error for non-struct config, got nil")
 		}
@@ -341,7 +341,7 @@ func TestLoadConfig_ErrorCases(ts *testing.T) {
 		}
 
 		config := &TestConfig{}
-		err = LoadConfig(config, 1, configPath, false)
+		err = LoadConfig(config, 1, configPath, false, false)
 		if err == nil {
 			ts.Error("Expected error for invalid JSON, got nil")
 		}
@@ -361,7 +361,7 @@ func TestLoadConfig_VersionManagement(ts *testing.T) {
 		}
 
 		// Load with new version
-		err := LoadConfig(config, 10, configPath, false)
+		err := LoadConfig(config, 10, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -378,7 +378,7 @@ func TestLoadConfig_VersionManagement(ts *testing.T) {
 		}
 
 		// Load with same version
-		err := LoadConfig(config, 10, configPath, false)
+		err := LoadConfig(config, 10, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -404,7 +404,7 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 			return 12345, nil
 		}
 
-		err := LoadConfig(config, 1, configPath, false, customHardwareID)
+		err := LoadConfig(config, 1, configPath, false, false, customHardwareID)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -433,7 +433,7 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 		configPath1 := filepath.Join(tempDir, "consistency_test1.json")
 
 		// Encrypt with hardware ID
-		err1 := LoadConfig(config1, 1, configPath1, false, customHardwareID)
+		err1 := LoadConfig(config1, 1, configPath1, false, false, customHardwareID)
 		if err1 != nil {
 			ts.Fatalf("LoadConfig failed for config1: %v", err1)
 		}
@@ -456,7 +456,7 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 		}
 
 		configPath2 := filepath.Join(tempDir, "consistency_test2.json")
-		err2 := LoadConfig(config2, 1, configPath2, false, customHardwareID)
+		err2 := LoadConfig(config2, 1, configPath2, false, false, customHardwareID)
 		if err2 != nil {
 			ts.Fatalf("LoadConfig failed for config2: %v", err2)
 		}
@@ -489,12 +489,12 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 		configPath1 := filepath.Join(tempDir, "different_hw1.json")
 		configPath2 := filepath.Join(tempDir, "different_hw2.json")
 
-		err1 := LoadConfig(config1, 1, configPath1, false, hardwareID1)
+		err1 := LoadConfig(config1, 1, configPath1, false, false, hardwareID1)
 		if err1 != nil {
 			ts.Fatalf("LoadConfig failed for config1: %v", err1)
 		}
 
-		err2 := LoadConfig(config2, 1, configPath2, false, hardwareID2)
+		err2 := LoadConfig(config2, 1, configPath2, false, false, hardwareID2)
 		if err2 != nil {
 			ts.Fatalf("LoadConfig failed for config2: %v", err2)
 		}
@@ -533,7 +533,7 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 		configPath2 := filepath.Join(tempDir, "hw_change_test2.json")
 
 		// Encrypt with first hardware ID
-		err1 := LoadConfig(config1, 1, configPath1, false, hardwareID1)
+		err1 := LoadConfig(config1, 1, configPath1, false, false, hardwareID1)
 		if err1 != nil {
 			ts.Fatalf("LoadConfig failed for config1: %v", err1)
 		}
@@ -542,7 +542,7 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 		// Note: Due to global initialization, this will use the key from hardwareID1
 		// but we can still verify that the encryption produces different results
 		// when called with different hardware IDs in separate test runs
-		err2 := LoadConfig(config2, 1, configPath2, false, hardwareID2)
+		err2 := LoadConfig(config2, 1, configPath2, false, false, hardwareID2)
 		if err2 != nil {
 			ts.Fatalf("LoadConfig failed for config2: %v", err2)
 		}
@@ -575,7 +575,7 @@ func TestLoadConfig_FilePermissions(ts *testing.T) {
 			DatabasePassword: "test-password",
 		}
 
-		err := LoadConfig(config, 1, configPath, false)
+		err := LoadConfig(config, 1, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -608,7 +608,7 @@ func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
 		}
 
 		// Use default hardware ID (no custom function provided)
-		err := LoadConfig(config, 1, configPath, false)
+		err := LoadConfig(config, 1, configPath, false, false)
 		if err != nil {
 			ts.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -639,7 +639,7 @@ func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
 		configPath1 := filepath.Join(tempDir, "default_consistency1.json")
 
 		// Encrypt with default hardware ID
-		err1 := LoadConfig(config1, 1, configPath1, false)
+		err1 := LoadConfig(config1, 1, configPath1, false, false)
 		if err1 != nil {
 			ts.Fatalf("LoadConfig failed for config1: %v", err1)
 		}
@@ -662,7 +662,7 @@ func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
 		}
 
 		configPath2 := filepath.Join(tempDir, "default_consistency2.json")
-		err2 := LoadConfig(config2, 1, configPath2, false)
+		err2 := LoadConfig(config2, 1, configPath2, false, false)
 		if err2 != nil {
 			ts.Fatalf("LoadConfig failed for config2: %v", err2)
 		}
@@ -705,7 +705,7 @@ func BenchmarkLoadConfig_Simple(b *testing.B) {
 			APIKey:           "benchmark-api-key",
 		}
 
-		err := LoadConfig(config, 1, configPath, false)
+		err := LoadConfig(config, 1, configPath, false, false)
 		if err != nil {
 			b.Fatalf("LoadConfig failed: %v", err)
 		}
@@ -733,7 +733,7 @@ func BenchmarkLoadConfig_WithExistingFile(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		config := &TestConfig{}
-		err := LoadConfig(config, 2, configPath, false)
+		err := LoadConfig(config, 2, configPath, false, false)
 		if err != nil {
 			b.Fatalf("LoadConfig failed: %v", err)
 		}
