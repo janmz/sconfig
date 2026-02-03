@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.8.18 (in version.go zu ändern)
+ * Version: 1.2.9.19 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  03.02.26	1.2.9	Feature: New debug function
  *  03.02.25	1.2.8	feat: DebugHardwareID() and docs for debugging hardware key changes
  *  03.12.25	1.2.7	fix: use biggest disk id
  *  03.12.25	1.2.6	fix: use ipconfig for mac address
