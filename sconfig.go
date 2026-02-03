@@ -3,17 +3,17 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.8.17 (in version.go zu ändern)
+ * Version: 1.2.8.18 (in version.go zu ändern)
  *
  * ChangeLog:
- *  03.12.25	1.2.8	fix: use biggesr disk id
- *  03.12.25	1.2.7	fix: use biggesr disk id
+ *  03.02.25	1.2.8	feat: DebugHardwareID() and docs for debugging hardware key changes
+ *  03.12.25	1.2.7	fix: use biggest disk id
  *  03.12.25	1.2.6	fix: use ipconfig for mac address
  *  03.12.25	1.2.5	fix: use route table for mac address
  *  02.12.25	1.2.3	fix: using volatile information on VM has voided the hardware id
  *  24.11.25	1.2.2	fixed missing password replacements
- * 24.11.25	1.2.1	fixed wrong composer settings and documentation
- * 24.11.25	1.2.0	included PHP variant
+ *  24.11.25	1.2.1	fixed wrong composer settings and documentation
+ *  24.11.25	1.2.0	included PHP variant
  *
  * Author: Jan Neuhaus, VAYA Consulting, https://vaya-consultig.de/development/ https://github.com/janmz
  *
@@ -776,6 +776,15 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID (uint64): %d (0x%016x)\n", hardwareID, hardwareID)
 	}
 	return hardwareID, nil
+}
+
+// DebugHardwareID computes the current hardware ID and prints all intermediate
+// results to stderr (VM detection, MAC source, identifiers used, hash, final ID).
+// Use this to debug changing hardware keys: run it when the key is "wrong" and
+// compare the output with a run when the key was "right" to see which identifier
+// changed. Returns the same value as the internal key used for encryption.
+func DebugHardwareID() (uint64, error) {
+	return secure_config_getHardwareID_debug(true)
 }
 
 // LoadConfig reads a JSON configuration file into the provided struct, applies

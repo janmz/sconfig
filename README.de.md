@@ -325,6 +325,35 @@ Die Bibliothek bettet Übersetzungen aus `locales/` ein. Eigene Übersetzungen k
 
 Siehe Abschnitt [PHP Internationalisierung](#php-internationalisierung) oben.
 
+## Hardware-ID / Schlüsseländerungen debuggen
+
+Wenn sich der hardware-abgeleitete Verschlüsselungsschlüssel ändert (Passwörter lassen sich auf derselben Maschine nicht mehr entschlüsseln), hilft Folgendes.
+
+### Warum sich der Schlüssel ändern kann
+
+Der Schlüssel ist ein Hash aus mehreren Identifikatoren. Jede Änderung in Menge oder Reihenfolge ändert den Schlüssel:
+
+- **Netzwerk (MAC-Adresse)**  
+  - **Windows:** Der „aktive“ Adapter ist der mit Standardgateway (`ipconfig /all`). Wechsel (VPN an/aus, anderer NIC, WLAN vs. LAN) oder fehlgeschlagene Erkennung → Fallback „erste MAC (sortiert)“; die Reihenfolge der Interfaces kann sich ändern → andere MAC.  
+  - **Linux:** Es wird die Schnittstelle für `ip route get 8.8.8.8` genutzt. Ändert sich das (z. B. VPN, zweite NIC) oder greift der Fallback „erste MAC (sortiert)“, kann sich die MAC ändern.
+- **Windows:** MachineGuid (VMs), SMBIOS-UUID (VMs), Baseboard-Seriennummer/Produkt, Festplatten-Seriennummer (erste nach Sortierung), CPU ProcessorId (nur physisch). Neuinstallation, Sysprep oder geänderte Laufwerke/Reihenfolge können diese ändern.
+- **Linux:** `machine-id`, `product_uuid` (VMs), `board_serial`, CPU-Seriennummer (nur physisch). Klonen, Neuinstallation oder anderes `/etc/machine-id` ändert den Schlüssel.
+
+### So debuggen Sie
+
+1. **Aktuelle Hardware-ID und alle Eingaben ausgeben (ohne Config-Datei):**
+   ```go
+   id, err := sconfig.DebugHardwareID()
+   // Alle Identifikatoren und die finale ID gehen nach stderr.
+   ```
+2. **Oder** `LoadConfig` mit Debug aufrufen:
+   ```go
+   err := sconfig.LoadConfig(&cfg, version, path, false, true) // 5. Parameter = debugOutput
+   ```
+   Dieselben Debug-Zeilen gehen nach stderr.
+
+3. Einmal ausführen, wenn der Schlüssel „falsch“ ist, und stderr speichern. Mit einem Lauf vergleichen, in dem der Schlüssel „richtig“ war (oder auf einer anderen Maschine). Die Zeilen `[sconfig DEBUG]` zeigen VM-Erkennung, verwendete MAC und jeden Identifikator vor dem Hashing; die abweichende(n) Zeile(n) sind die Ursache.
+
 ## Sicherheitshinweise
 
 - **Rechnergebundene Verschlüsselung**: Passwörter werden mit Schlüsseln verschlüsselt, die aus Hardware-Identifikatoren abgeleitet werden, wodurch verschlüsselte Konfigurationsdateien auf anderen Systemen unbrauchbar sind

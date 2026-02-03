@@ -597,6 +597,17 @@ func TestLoadConfig_FilePermissions(ts *testing.T) {
 	})
 }
 
+func TestDebugHardwareID(ts *testing.T) {
+	// DebugHardwareID prints to stderr; we only verify it returns a valid ID
+	id, err := DebugHardwareID()
+	if err != nil {
+		ts.Fatalf("DebugHardwareID failed: %v", err)
+	}
+	if id == 0 {
+		ts.Error("DebugHardwareID returned 0")
+	}
+}
+
 func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
 	tempDir := ts.TempDir()
 	configPath := filepath.Join(tempDir, "default_hw.json")

@@ -327,6 +327,35 @@ The package embeds translations from `locales/`. You can override by placing ext
 
 See [PHP Internationalization](#php-internationalization) section above.
 
+## Debugging hardware ID / key changes
+
+If the hardware-derived encryption key changes (passwords no longer decrypt on the same machine), the following can help.
+
+### Why the key can change
+
+The key is a hash of several identifiers. Any change in the set or order of these changes the key:
+
+- **Network (MAC address)**  
+  - **Windows:** The "active" adapter is the one with the default gateway (`ipconfig /all`). If you switch (VPN on/off, different NIC, Wi‑Fi vs Ethernet), or the gateway detection fails and the fallback "first MAC (sorted)" is used, the order of interfaces can differ → different MAC.  
+  - **Linux:** The interface used for `ip route get 8.8.8.8` is used. If that changes (e.g. VPN, second NIC), or the fallback "first MAC (sorted)" is used, the MAC can change.
+- **Windows:** MachineGuid (VMs), SMBIOS UUID (VMs), baseboard serial/product, disk serial (first after sort), CPU ProcessorId (physical only). Reinstall, Sysprep, or changing disks/order can change these.
+- **Linux:** `machine-id`, `product_uuid` (VMs), `board_serial`, CPU serial (physical only). Cloning, reinstall, or different `/etc/machine-id` changes the key.
+
+### How to debug
+
+1. **Print current hardware ID and all inputs (no config file needed):**
+   ```go
+   id, err := sconfig.DebugHardwareID()
+   // All identifiers and the final ID are printed to stderr.
+   ```
+2. **Or** call `LoadConfig` with debug on:
+   ```go
+   err := sconfig.LoadConfig(&cfg, version, path, false, true) // 5th param = debugOutput
+   ```
+   Same debug lines go to stderr.
+
+3. Run once when the key is "wrong" and save stderr. Compare with a run when the key was "right" (or on another machine). The `[sconfig DEBUG]` lines show VM detection, which MAC was used, and every identifier before hashing; the differing line(s) are the cause.
+
 ## Security Notes
 
 - **Machine-bound encryption**: Passwords are encrypted using keys derived from hardware identifiers, making encrypted config files unusable on other systems
