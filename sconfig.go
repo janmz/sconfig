@@ -3,9 +3,11 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.9.19 (in version.go zu ändern)
+ * Version: 1.2.10.21 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  03.02.26	1.2.10	Feature: Corrected error message for failed decryption
+ *  03.02.26	1.2.9.20	fix: decrypt_failed error format (pass pw_prefix and err to t())
  *  03.02.26	1.2.9	Feature: New debug function
  *  03.02.25	1.2.8	feat: DebugHardwareID() and docs for debugging hardware key changes
  *  03.12.25	1.2.7	fix: use biggest disk id
@@ -775,6 +777,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 	hardwareID := uint64(hash[7])<<56 + uint64(hash[6])<<48 + uint64(hash[5])<<40 + uint64(hash[4])<<32 + uint64(hash[3])<<24 + uint64(hash[2])<<16 + uint64(hash[1])<<8 + uint64(hash[0])
 	if debugOutput {
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID (uint64): %d (0x%016x)\n", hardwareID, hardwareID)
+		_ = os.Stderr.Sync() // flush so debug is visible even if process exits after error
 	}
 	return hardwareID, nil
 }
@@ -1085,7 +1088,8 @@ func decodePasswords(v reflect.Value) error {
 						field2Value := v.Field(j)
 						password, err := decrypt(fieldValue.String())
 						if err != nil {
-							return fmt.Errorf(t("config.decrypt_failed", pw_prefix), err)
+							// Pass pw_prefix and err so the format string "failed to decrypt %s password: %v" gets both values
+							return fmt.Errorf("%s", t("config.decrypt_failed", pw_prefix, err))
 						}
 						field2Value.SetString(password)
 						break

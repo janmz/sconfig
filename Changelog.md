@@ -2,7 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.2.8.18] - 2025-02-03
+## [1.2.9.20] - 2026-02-03
+
+### Fixed
+
+- **Decrypt error message formatting**: The message for decryption failure (`config.decrypt_failed`) used the i18n format string "failed to decrypt %s password: %v" but only passed the password field name to `t()`, not the error. That led to `%v(MISSING)` and malformed output like `&{%!!(string=cipher: message authentication failed)}v(MISSING)`. The code now passes both the field name and the error to `t()` and uses `fmt.Errorf("%s", t(...))` so the full message is formatted correctly (e.g. "failed to decrypt Root password: cipher: message authentication failed").
+
+---
+
+## [1.2.9.18] - 2025-02-03
 
 ### Added
 
