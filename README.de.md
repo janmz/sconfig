@@ -336,7 +336,7 @@ Siehe Abschnitt [PHP Internationalisierung](#php-internationalisierung) oben.
 
 Dieses Projekt ist Donation-Ware. Wenn es dir hilft, spende bitte an die CFI Kinderhilfe und unterstütze damit Kinder in Not:
 
-- Jetzt spenden: [https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG](Spendenseite von CFI Kinderhilfe)
+- Jetzt spenden: [Spendenseite von CFI Kinderhilfe](https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG)
 
 ## Mitwirken
 
