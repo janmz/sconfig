@@ -367,7 +367,7 @@ The key is a hash of several identifiers. Any change in the set or order of thes
 
 This project is provided as donationware. If it helps you, please consider donating to CFI Kinderhilfe to support children in need:
 
-- Donate: [https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG](Donation page of CFI Kinderhilfe - in German!)
+- Donate: [Donation page of CFI Kinderhilfe - in German!](https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG)
 
 ## Contributing
 
