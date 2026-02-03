@@ -338,7 +338,7 @@ See [PHP Internationalization](#php-internationalization) section above.
 
 This project is provided as donationware. If it helps you, please consider donating to CFI Kinderhilfe to support children in need:
 
-- Donate: [https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG](Donation page of CFI Kinderhilfe - in German!)
+- Donate: [Donation page of CFI Kinderhilfe - in German!](https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG)
 
 ## Contributing
 
