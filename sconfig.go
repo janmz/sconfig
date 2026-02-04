@@ -3,11 +3,12 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.10.21 (in version.go zu ändern)
+ * Version: 1.2.11.23 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  04.02.26	1.2.11	Feature: Added tracking of hardware IDs
+ *  03.02.26	1.2.10.22	feat: debug track of hardware IDs to sconfig.debug.json (executable dir)
  *  03.02.26	1.2.10	Feature: Corrected error message for failed decryption
- *  03.02.26	1.2.9.20	fix: decrypt_failed error format (pass pw_prefix and err to t())
  *  03.02.26	1.2.9	Feature: New debug function
  *  03.02.25	1.2.8	feat: DebugHardwareID() and docs for debugging hardware key changes
  *  03.12.25	1.2.7	fix: use biggest disk id
@@ -36,10 +37,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"crypto/aes"    // AES Encryption
 	"crypto/cipher" // Cipher for GCM
@@ -63,6 +66,54 @@ var PASSWORD_IS_SECURE_de string
 
 var encryptionKey []byte
 var initialized = false
+
+// Debug tracking: when debugOutput is true, hardware ID and identifiers are logged to sconfig.debug.json
+var debugMode bool
+var lastDebugHardwareID uint64
+var lastDebugIdentifiers string
+
+const debugLogFilename = "sconfig.debug.txt"
+
+/*
+ * getExecutableDir returns the directory of the running executable.
+ * Used to place sconfig.debug.json next to the binary.
+ */
+func getExecutableDir() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(path), nil
+}
+
+/*
+ * writeDebugLog appends one line to sconfig.debug.json in the executable directory.
+ * Line format: date<TAB>time<TAB>hardwareID<TAB>identifiers
+ * Only used when debug mode is on; safe to call with debugLogMu held or from single goroutine.
+ */
+func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
+	dir, err := getExecutableDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] cannot get executable dir for debug log: %v\n", err)
+		return
+	}
+	path := filepath.Join(dir, debugLogFilename)
+	if onlyOnInit {
+		if _, err := os.Stat(path); err == nil {
+			// if the file already exists, do nothing
+			return
+		}
+	}
+	now := time.Now()
+	line := now.Format("2006-01-02 15:04:05") + "\t" + fmt.Sprintf("0x%016x", hardwareID) + "\t" + identifiers + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] cannot open debug log %s: %v\n", path, err)
+		return
+	}
+	_, _ = f.WriteString(line)
+	_ = f.Close()
+}
 
 /*
  * Check if the system is running on a virtual machine
@@ -778,6 +829,9 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 	if debugOutput {
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID (uint64): %d (0x%016x)\n", hardwareID, hardwareID)
 		_ = os.Stderr.Sync() // flush so debug is visible even if process exits after error
+		writeDebugLog(hardwareID, combined, true)
+		lastDebugHardwareID = hardwareID
+		lastDebugIdentifiers = combined
 	}
 	return hardwareID, nil
 }
@@ -895,6 +949,7 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
  * insecure key generation procedure can also be used.
  */
 func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
+	debugMode = debugOutput
 	if !initialized {
 		// Generate encryption key based on Hardware IS
 		hardwareID, err := getHardwareID_func()
@@ -1088,6 +1143,9 @@ func decodePasswords(v reflect.Value) error {
 						field2Value := v.Field(j)
 						password, err := decrypt(fieldValue.String())
 						if err != nil {
+							if debugMode {
+								writeDebugLog(lastDebugHardwareID, lastDebugIdentifiers, false)
+							}
 							// Pass pw_prefix and err so the format string "failed to decrypt %s password: %v" gets both values
 							return fmt.Errorf("%s", t("config.decrypt_failed", pw_prefix, err))
 						}

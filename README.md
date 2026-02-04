@@ -1,6 +1,7 @@
 # sconfig
 
-Utilities for loading and maintaining configuration files with secure password handling. Available in **Go** (JSON config files) and **PHP** (.env files).
+Utilities for loading and maintaining configuration files with secure password
+handling. Available in **Go** (JSON config files) and **PHP** (.env files).
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/janmz/sconfig.svg)](https://pkg.go.dev/github.com/janmz/sconfig)
 [![Go Report Card](https://goreportcard.com/badge/github.com/janmz/sconfig)](https://goreportcard.com/report/github.com/janmz/sconfig)
@@ -26,7 +27,8 @@ composer require janmz/sconfig
 
 #### Via Git Repository (development/current)
 
-**Important:** Since the package is not yet published on Packagist, you must first add the repository to your `composer.json`:
+**Important:** Since the package is not yet published on Packagist, you must
+first add the repository to your `composer.json`:
 
 ```json
 {
@@ -43,6 +45,7 @@ composer require janmz/sconfig
 ```
 
 Then run:
+
 ```bash
 composer install
 ```
@@ -53,7 +56,8 @@ composer install
 composer require janmz/sconfig:dev-main --prefer-source --repository='{"type":"vcs","url":"https://github.com/janmz/sconfig"}'
 ```
 
-However, it's recommended to add the repository to your `composer.json` first, then use:
+However, it's recommended to add the repository to your `composer.json` first,
+then use:
 
 ```bash
 composer require janmz/sconfig:dev-main --prefer-source
@@ -65,7 +69,8 @@ composer require janmz/sconfig:dev-main --prefer-source
 
 - Default value population via struct field tags (e.g., `default:"value"`).
 - Automatic version synchronization of a `Version` field.
-- Transparent password handling using `<Name>Password` and `<Name>SecurePassword` pairs.
+- Transparent password handling using `<Name>Password` and
+  `<Name>SecurePassword` pairs.
 - Embedded i18n strings for errors (English fallback, German supported).
 
 ### Quick Start
@@ -94,15 +99,20 @@ func main() {
 }
 ```
 
-- On first run with a plaintext `DBPassword`, the file is rewritten with an encrypted `DBSecurePassword` and a marker in `DBPassword`.
-- In memory, `DBPassword` is automatically decrypted for use (unless `cleanConfig` is set to `true`).
+- On first run with a plaintext `DBPassword`, the file is rewritten with an
+  encrypted `DBSecurePassword` and a marker in `DBPassword`.
+- In memory, `DBPassword` is automatically decrypted for use (unless
+  `cleanConfig` is set to `true`).
 
 ### Versioning
 
-Version info variables are exposed for convenience and can be overridden via `-ldflags`:
+Version info variables are exposed for convenience and can be overridden via
+`-ldflags`:
 
 ```bash
-go build -ldflags "-X github.com/janmz/sconfig.Version=1.2.3 -X github.com/janmz/sconfig.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/janmz/sconfig.GitCommit=$(git rev-parse --short HEAD)"
+go build -ldflags "-X github.com/janmz/sconfig.Version=1.2.3 \
+  -X github.com/janmz/sconfig.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -X github.com/janmz/sconfig.GitCommit=$(git rev-parse --short HEAD)"
 ```
 
 ## PHP Version
@@ -142,7 +152,8 @@ $apiKey = env('API_KEY');
 
 #### Secure Password Handling
 
-The library automatically handles password encryption for fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD`:
+The library automatically handles password encryption for fields named
+`<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD`:
 
 ```php
 use Sconfig\EnvLoader;
@@ -155,6 +166,7 @@ $dbPassword = env('DB_PASSWORD'); // Returns decrypted value
 ```
 
 **How it works:**
+
 1. If `DB_PASSWORD` contains a plaintext password (not the marker), it will be encrypted
 2. The encrypted value is stored in `DB_SECURE_PASSWORD`
 3. `DB_PASSWORD` is replaced with the marker "Enter new password here"
@@ -172,7 +184,8 @@ DB_PASSWORD=Enter new password here
 DB_SECURE_PASSWORD=<encrypted_base64_string>
 ```
 
-The encrypted passwords are machine-bound (derived from hardware identifiers), making them unusable on other systems.
+The encrypted passwords are machine-bound (derived from hardware identifiers),
+making them unusable on other systems.
 
 #### Loading from Custom Path
 
@@ -195,7 +208,8 @@ EnvLoader::load('.env', true); // override = true
 
 #### Clean Config Mode
 
-To decrypt passwords before writing (use with care, primarily for migration or inspection):
+To decrypt passwords before writing (use with care, primarily for migration
+or inspection):
 
 ```php
 use Sconfig\EnvLoader;
@@ -226,7 +240,8 @@ if (EnvLoader::has('KEY')) {
 
 ### .env File Format
 
-The `.env` file should follow this format. An example file `example_env` is included in the `php/` directory:
+The `.env` file should follow this format. An example file `example_env` is
+included in the `php/` directory:
 
 ```env
 # Database Configuration
@@ -246,24 +261,34 @@ APP_ENV=production
 DEBUG=false
 ```
 
-**Note:** Copy `php/example_env` to `.env` in your project directory and customize it.
+**Note:** Copy `php/example_env` to `.env` in your project directory and
+customize it.
 
 - Lines starting with `#` are treated as comments
 - Empty lines are ignored
-- Values can be quoted with single or double quotes (quotes are automatically removed)
+- Values can be quoted with single or double quotes (quotes are
+  automatically removed)
 - Spaces around `=` are automatically trimmed
-- **Password pairs**: Fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD` are automatically encrypted
+- **Password pairs**: Fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD`
+  are automatically encrypted
 
 ### API Reference
 
-#### EnvLoader::load(string $filePath, bool $override = false, bool $cleanConfig = false)
+#### EnvLoader::load()
+
+```php
+EnvLoader::load(string $filePath, bool $override = false,
+bool $cleanConfig = false)
+```
 
 Loads environment variables from a `.env` file and processes password encryption.
 
 **Parameters:**
+
 - `$filePath` - Path to the `.env` file
 - `$override` - Whether to override existing environment variables (default: false)
-- `$cleanConfig` - If true, decrypts passwords before writing (default: false, use with care)
+- `$cleanConfig` - If true, decrypts passwords before writing (default: false,
+  use with care)
 
 **Throws:** `RuntimeException` if the file cannot be read or encryption fails
 
@@ -272,6 +297,7 @@ Loads environment variables from a `.env` file and processes password encryption
 Global helper function to get an environment variable value.
 
 **Parameters:**
+
 - `$key` - The environment variable key
 - `$default` - Default value if key is not found
 
@@ -295,9 +321,13 @@ Check if environment has been loaded.
 
 ### PHP Internationalization
 
-The library supports multiple languages and automatically detects the system language from environment variables (`LANG`, `LC_ALL`, `LC_MESSAGES`). Translations are loaded from the `locales/` directory (same JSON files as the Go version).
+The library supports multiple languages and automatically detects the system
+language from environment variables (`LANG`, `LC_ALL`, `LC_MESSAGES`).
+Translations are loaded from the `locales/` directory (same JSON files as the
+Go version).
 
 Supported languages:
+
 - English (en) - default/fallback
 - German (de)
 
@@ -311,17 +341,20 @@ $message = I18n::t('config.password_message'); // Get translated message
 ```
 
 The library automatically finds the `locales/` directory by searching:
+
 1. Parent directory of the PHP package (`../locales`)
 2. Project root (`./locales`)
 3. Current working directory (`./locales`)
 
 ## Internationalization
 
-Both versions support multiple languages and automatically detect the system language. Translations are loaded from the `locales/` directory.
+Both versions support multiple languages and automatically detect the system
+language. Translations are loaded from the `locales/` directory.
 
 ### Go
 
-The package embeds translations from `locales/`. You can override by placing external files in a `locales` directory next to your binary.
+The package embeds translations from `locales/`. You can override by placing
+external files in a `locales` directory next to your binary.
 
 ### PHP
 
@@ -329,43 +362,73 @@ See [PHP Internationalization](#php-internationalization) section above.
 
 ## Debugging hardware ID / key changes
 
-If the hardware-derived encryption key changes (passwords no longer decrypt on the same machine), the following can help.
+If the hardware-derived encryption key changes (passwords no longer decrypt on
+the same machine), the following can help.
 
 ### Why the key can change
 
-The key is a hash of several identifiers. Any change in the set or order of these changes the key:
+The key is a hash of several identifiers. Any change in the set or order of
+these changes the key:
 
-- **Network (MAC address)**  
-  - **Windows:** The "active" adapter is the one with the default gateway (`ipconfig /all`). If you switch (VPN on/off, different NIC, Wi‑Fi vs Ethernet), or the gateway detection fails and the fallback "first MAC (sorted)" is used, the order of interfaces can differ → different MAC.  
-  - **Linux:** The interface used for `ip route get 8.8.8.8` is used. If that changes (e.g. VPN, second NIC), or the fallback "first MAC (sorted)" is used, the MAC can change.
-- **Windows:** MachineGuid (VMs), SMBIOS UUID (VMs), baseboard serial/product, disk serial (first after sort), CPU ProcessorId (physical only). Reinstall, Sysprep, or changing disks/order can change these.
-- **Linux:** `machine-id`, `product_uuid` (VMs), `board_serial`, CPU serial (physical only). Cloning, reinstall, or different `/etc/machine-id` changes the key.
+- **Network (MAC address)**
+  - **Windows:** The "active" adapter is the one with the default gateway
+    (`ipconfig /all`). If you switch (VPN on/off, different NIC, Wi‑Fi vs
+    Ethernet), or the gateway detection fails and the fallback "first MAC
+    (sorted)" is used, the order of interfaces can differ → different MAC.
+  - **Linux:** The interface used for `ip route get 8.8.8.8` is used. If that
+    changes (e.g. VPN, second NIC), or the fallback "first MAC (sorted)" is
+    used, the MAC can change.
+- **Windows:** MachineGuid (VMs), SMBIOS UUID (VMs), baseboard serial/product,
+  disk serial (first after sort), CPU ProcessorId (physical only). Reinstall,
+  Sysprep, or changing disks/order can change these.
+- **Linux:** `machine-id`, `product_uuid` (VMs), `board_serial`, CPU serial
+  (physical only). Cloning, reinstall, or different `/etc/machine-id` changes
+  the key.
 
 ### How to debug
 
 1. **Print current hardware ID and all inputs (no config file needed):**
+
    ```go
    id, err := sconfig.DebugHardwareID()
    // All identifiers and the final ID are printed to stderr.
    ```
+
 2. **Or** call `LoadConfig` with debug on:
+
    ```go
    err := sconfig.LoadConfig(&cfg, version, path, false, true) // 5th param = debugOutput
    ```
+
    Same debug lines go to stderr.
 
-3. Run once when the key is "wrong" and save stderr. Compare with a run when the key was "right" (or on another machine). The `[sconfig DEBUG]` lines show VM detection, which MAC was used, and every identifier before hashing; the differing line(s) are the cause.
+3. Run once when the key is "wrong" and save stderr. Compare with a run when
+   the key was "right" (or on another machine). The `[sconfig DEBUG]` lines
+   show VM detection, which MAC was used, and every identifier before
+   hashing; the differing line(s) are the cause.
+
+4. **Hardware-ID track**: When debug is on, each hardware-ID computation and
+   each decryption failure appends a line to `sconfig.debug.json` in the
+   executable’s directory. Format:
+   `date<TAB>time<TAB>hardwareID<TAB>identifiers`.
+   Use this to see a timeline of IDs (e.g. after a failed decrypt).
 
 ## Security Notes
 
-- **Machine-bound encryption**: Passwords are encrypted using keys derived from hardware identifiers, making encrypted config files unusable on other systems
-- **Transparent decryption**: Passwords are automatically decrypted in memory for easy access
-- **Use `cleanConfig` with care**: Setting `cleanConfig = true` writes plaintext passwords to the file
-- **Hardware ID**: The encryption key is generated from system hardware identifiers (MAC address, CPU ID, etc.)
+- **Machine-bound encryption**: Passwords are encrypted using keys derived
+  from hardware identifiers, making encrypted config files unusable on other
+  systems
+- **Transparent decryption**: Passwords are automatically decrypted in memory
+  for easy access
+- **Use `cleanConfig` with care**: Setting `cleanConfig = true` writes
+  plaintext passwords to the file
+- **Hardware ID**: The encryption key is generated from system hardware
+  identifiers (MAC address, CPU ID, etc.)
 
 ## Donationware
 
-This project is provided as donationware. If it helps you, please consider donating to CFI Kinderhilfe to support children in need:
+This project is provided as donationware. If it helps you, please consider
+donating to CFI Kinderhilfe to support children in need:
 
 - Donate: [Donation page of CFI Kinderhilfe - in German!](https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG)
 

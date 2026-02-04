@@ -1,10 +1,14 @@
 # sconfig
 
-Werkzeuge zum Laden und Pflegen von Konfigurationsdateien mit sicherer Passwortbehandlung. Verfügbar in **Go** (JSON-Konfigurationsdateien) und **PHP** (.env-Dateien).
+Werkzeuge zum Laden und Pflegen von Konfigurationsdateien mit sicherer
+Passwortbehandlung. Verfügbar in **Go** (JSON-Konfigurationsdateien) und
+**PHP** (.env-Dateien).
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/janmz/sconfig.svg)](https://pkg.go.dev/github.com/janmz/sconfig)
 [![Go Report Card](https://goreportcard.com/badge/github.com/janmz/sconfig)](https://goreportcard.com/report/github.com/janmz/sconfig)
 [![CI](https://github.com/janmz/sconfig/actions/workflows/ci.yml/badge.svg)](https://github.com/janmz/sconfig/actions/workflows/ci.yml)
+
+[🇬🇧 GB/EN version](README.md)
 
 ## Installation
 
@@ -24,7 +28,8 @@ composer require janmz/sconfig
 
 #### Via Git Repository (Entwicklung/Aktuell)
 
-**Wichtig:** Da das Paket noch nicht auf Packagist veröffentlicht ist, musst du zuerst das Repository in deiner `composer.json` hinzufügen:
+**Wichtig:** Da das Paket noch nicht auf Packagist veröffentlicht ist, musst du
+zuerst das Repository in deiner `composer.json` hinzufügen:
 
 ```json
 {
@@ -41,6 +46,7 @@ composer require janmz/sconfig
 ```
 
 Dann ausführen:
+
 ```bash
 composer install
 ```
@@ -51,7 +57,8 @@ composer install
 composer require janmz/sconfig:dev-main --prefer-source --repository='{"type":"vcs","url":"https://github.com/janmz/sconfig"}'
 ```
 
-Es wird jedoch empfohlen, das Repository zuerst in deiner `composer.json` hinzuzufügen, dann zu verwenden:
+Es wird jedoch empfohlen, das Repository zuerst in deiner `composer.json`
+hinzuzufügen, dann zu verwenden:
 
 ```bash
 composer require janmz/sconfig:dev-main --prefer-source
@@ -92,8 +99,12 @@ func main() {
 }
 ```
 
-- Beim ersten Lauf mit einem Klartext-`DBPassword` wird die Datei mit einem verschlüsselten `DBSecurePassword` neu geschrieben und `DBPassword` mit einem Marker ersetzt.
-- Im Speicher wird `DBPassword` automatisch entschlüsselt (außer `cleanConfig` ist `true`).
+- Beim ersten Lauf mit einem Klartext-`DBPassword` wird die Datei mit einem
+  verschlüsselten `DBSecurePassword` neu geschrieben und `DBPassword` mit einem
+  Marker ersetzt.
+- Im Speicher wird `DBPassword` automatisch entschlüsselt (wenn `cleanConfig`
+  `true` ist wird es, z.B. für den Wechsel auf eine andere Hardware, auch in
+  der Datei im Klartext gespeichert).
 
 ### Versionierung
 
@@ -108,7 +119,8 @@ go build -ldflags "-X github.com/janmz/sconfig.Version=1.2.3 -X github.com/janmz
 ### Funktionen
 
 - Einfach und leichtgewichtig
-- **Automatische Passwortverschlüsselung/-entschlüsselung** mit hardwaregebundenen Schlüsseln
+- **Automatische Passwortverschlüsselung/-entschlüsselung** mit
+  hardwaregebundenen Schlüsseln
 - **Mehrsprachige Unterstützung** (Englisch, Deutsch) mit automatischer Spracherkennung
 - Automatisches Caching geladener Werte
 - Unterstützung für Standardwerte
@@ -140,7 +152,8 @@ $apiKey = env('API_KEY');
 
 #### Sichere Passwortbehandlung
 
-Die Bibliothek behandelt automatisch die Passwortverschlüsselung für Felder mit den Namen `<NAME>_PASSWORD` und `<NAME>_SECURE_PASSWORD`:
+Die Bibliothek behandelt automatisch die Passwortverschlüsselung für Felder mit
+den Namen `<NAME>_PASSWORD` und `<NAME>_SECURE_PASSWORD`:
 
 ```php
 use Sconfig\EnvLoader;
@@ -153,10 +166,13 @@ $dbPassword = env('DB_PASSWORD'); // Gibt den entschlüsselten Wert zurück
 ```
 
 **So funktioniert es:**
-1. Wenn `DB_PASSWORD` ein Klartext-Passwort enthält (nicht den Marker), wird es verschlüsselt
+
+1. Wenn `DB_PASSWORD` ein Klartext-Passwort enthält (nicht den Marker), wird es
+   verschlüsselt
 2. Der verschlüsselte Wert wird in `DB_SECURE_PASSWORD` gespeichert
 3. `DB_PASSWORD` wird durch den Marker "Neues Passwort hier eingeben" ersetzt
-4. Im Speicher werden Passwörter automatisch entschlüsselt für transparenten Zugriff über `env()`
+4. Im Speicher werden Passwörter automatisch entschlüsselt für transparenten
+   Zugriff über `env()`
 
 **Beispiel .env-Datei:**
 
@@ -170,7 +186,8 @@ DB_PASSWORD=Neues Passwort hier eingeben
 DB_SECURE_PASSWORD=<verschlüsselte_base64_zeichenkette>
 ```
 
-Die verschlüsselten Passwörter sind rechnergebunden (abgeleitet von Hardware-Identifikatoren), wodurch sie auf anderen Systemen unbrauchbar sind.
+Die verschlüsselten Passwörter sind rechnergebunden (abgeleitet von Hardware-
+Identifikatoren), wodurch sie auf anderen Systemen unbrauchbar sind.
 
 #### Laden von benutzerdefiniertem Pfad
 
@@ -183,7 +200,8 @@ EnvLoader::load('/pfad/zur/deiner/.env');
 
 #### Überschreiben bestehender Variablen
 
-Standardmäßig werden bestehende Umgebungsvariablen nicht überschrieben. Um sie zu überschreiben:
+Standardmäßig werden bestehende Umgebungsvariablen nicht überschrieben. Um sie
+zu überschreiben:
 
 ```php
 use Sconfig\EnvLoader;
@@ -193,7 +211,8 @@ EnvLoader::load('.env', true); // override = true
 
 #### Clean Config Modus
 
-Um Passwörter vor dem Schreiben zu entschlüsseln (mit Vorsicht verwenden, hauptsächlich für Migration oder Inspektion):
+Um Passwörter vor dem Schreiben zu entschlüsseln (mit Vorsicht verwenden,
+hauptsächlich für Migration oder Inspektion):
 
 ```php
 use Sconfig\EnvLoader;
@@ -224,7 +243,8 @@ if (EnvLoader::has('KEY')) {
 
 ### .env Dateiformat
 
-Die `.env`-Datei sollte diesem Format folgen. Eine Beispieldatei `example_env` ist im `php/` Verzeichnis enthalten:
+Die `.env`-Datei sollte diesem Format folgen. Eine Beispieldatei `example_env`
+ist im `php/` Verzeichnis enthalten:
 
 ```env
 # Datenbank-Konfiguration
@@ -244,32 +264,45 @@ APP_ENV=production
 DEBUG=false
 ```
 
-**Hinweis:** Kopiere `php/example_env` nach `.env` in dein Projektverzeichnis und passe es an.
+**Hinweis:** Kopiere `php/example_env` nach `.env` in dein Projektverzeichnis
+und passe es an.
 
 - Zeilen die mit `#` beginnen werden als Kommentare behandelt
 - Leere Zeilen werden ignoriert
-- Werte können mit einfachen oder doppelten Anführungszeichen versehen werden (Anführungszeichen werden automatisch entfernt)
+- Werte können mit einfachen oder doppelten Anführungszeichen versehen werden
+  (Anführungszeichen werden automatisch entfernt)
 - Leerzeichen um `=` werden automatisch entfernt
-- **Passwort-Paare**: Felder mit den Namen `<NAME>_PASSWORD` und `<NAME>_SECURE_PASSWORD` werden automatisch verschlüsselt
+- **Passwort-Paare**: Felder mit den Namen `<NAME>_PASSWORD` und
+  `<NAME>_SECURE_PASSWORD` werden automatisch verschlüsselt
 
 ### API-Referenz
 
-#### EnvLoader::load(string $filePath, bool $override = false, bool $cleanConfig = false)
+#### EnvLoader::load()
+
+```php
+EnvLoader::load(string $filePath, bool $override = false,
+bool $cleanConfig = false)
+```
 
 Lädt Umgebungsvariablen aus einer `.env`-Datei und verarbeitet die Passwortverschlüsselung.
 
 **Parameter:**
-- `$filePath` - Pfad zur `.env`-Datei
-- `$override` - Ob bestehende Umgebungsvariablen überschrieben werden sollen (Standard: false)
-- `$cleanConfig` - Wenn true, werden Passwörter vor dem Schreiben entschlüsselt (Standard: false, mit Vorsicht verwenden)
 
-**Wirft:** `RuntimeException` wenn die Datei nicht gelesen werden kann oder die Verschlüsselung fehlschlägt
+- `$filePath` - Pfad zur `.env`-Datei
+- `$override` - Ob bestehende Umgebungsvariablen überschrieben werden sollen
+                (Standard: false)
+- `$cleanConfig` - Wenn true, werden Passwörter vor dem Schreiben entschlüsselt
+                   (Standard: false, mit Vorsicht verwenden)
+
+**Wirft:** `RuntimeException` wenn die Datei nicht gelesen werden kann oder die
+Verschlüsselung fehlschlägt
 
 #### env(string $key, mixed $default = null)
 
 Globale Helper-Funktion zum Abrufen eines Umgebungsvariablen-Werts.
 
 **Parameter:**
+
 - `$key` - Der Umgebungsvariablen-Schlüssel
 - `$default` - Standardwert wenn Schlüssel nicht gefunden wird
 
@@ -293,9 +326,13 @@ Prüfen ob die Umgebung geladen wurde.
 
 ### PHP Internationalisierung
 
-Die Bibliothek unterstützt mehrere Sprachen und erkennt automatisch die Systemsprache aus Umgebungsvariablen (`LANG`, `LC_ALL`, `LC_MESSAGES`). Übersetzungen werden aus dem `locales/` Verzeichnis geladen (gleiche JSON-Dateien wie die Go-Variante).
+Die Bibliothek unterstützt mehrere Sprachen und erkennt automatisch die
+Systemsprache aus Umgebungsvariablen (`LANG`, `LC_ALL`, `LC_MESSAGES`).
+Übersetzungen werden aus dem `locales/` Verzeichnis geladen (gleiche
+JSON-Dateien wie die Go-Variante).
 
 Unterstützte Sprachen:
+
 - Englisch (en) - Standard/Fallback
 - Deutsch (de)
 
@@ -309,17 +346,21 @@ $message = I18n::t('config.password_message'); // Übersetzte Nachricht abrufen
 ```
 
 Die Bibliothek findet das `locales/` Verzeichnis automatisch durch Suche in:
+
 1. Übergeordnetes Verzeichnis des PHP-Pakets (`../locales`)
 2. Projekt-Root (`./locales`)
 3. Aktuelles Arbeitsverzeichnis (`./locales`)
 
 ## Internationalisierung
 
-Beide Varianten unterstützen mehrere Sprachen und erkennen automatisch die Systemsprache. Übersetzungen werden aus dem `locales/` Verzeichnis geladen.
+Beide Varianten unterstützen mehrere Sprachen und erkennen automatisch die
+Systemsprache. Übersetzungen werden aus dem `locales/` Verzeichnis geladen.
 
 ### Go
 
-Die Bibliothek bettet Übersetzungen aus `locales/` ein. Eigene Übersetzungen können durch externe Dateien im Verzeichnis `locales` neben dem Binary überschrieben werden.
+Die Bibliothek bettet Übersetzungen aus `locales/` ein. Eigene Übersetzungen
+können durch externe Dateien im Verzeichnis `locales` neben dem Binary
+überschrieben werden.
 
 ### PHP
 
@@ -327,43 +368,75 @@ Siehe Abschnitt [PHP Internationalisierung](#php-internationalisierung) oben.
 
 ## Hardware-ID / Schlüsseländerungen debuggen
 
-Wenn sich der hardware-abgeleitete Verschlüsselungsschlüssel ändert (Passwörter lassen sich auf derselben Maschine nicht mehr entschlüsseln), hilft Folgendes.
+Wenn sich der hardware-abgeleitete Verschlüsselungsschlüssel ändert (Passwörter
+lassen sich auf derselben Maschine nicht mehr entschlüsseln), hilft Folgendes.
 
 ### Warum sich der Schlüssel ändern kann
 
-Der Schlüssel ist ein Hash aus mehreren Identifikatoren. Jede Änderung in Menge oder Reihenfolge ändert den Schlüssel:
+Der Schlüssel ist ein Hash aus mehreren Identifikatoren. Jede Änderung in Menge
+oder Reihenfolge ändert den Schlüssel:
 
 - **Netzwerk (MAC-Adresse)**  
-  - **Windows:** Der „aktive“ Adapter ist der mit Standardgateway (`ipconfig /all`). Wechsel (VPN an/aus, anderer NIC, WLAN vs. LAN) oder fehlgeschlagene Erkennung → Fallback „erste MAC (sortiert)“; die Reihenfolge der Interfaces kann sich ändern → andere MAC.  
-  - **Linux:** Es wird die Schnittstelle für `ip route get 8.8.8.8` genutzt. Ändert sich das (z. B. VPN, zweite NIC) oder greift der Fallback „erste MAC (sortiert)“, kann sich die MAC ändern.
-- **Windows:** MachineGuid (VMs), SMBIOS-UUID (VMs), Baseboard-Seriennummer/Produkt, Festplatten-Seriennummer (erste nach Sortierung), CPU ProcessorId (nur physisch). Neuinstallation, Sysprep oder geänderte Laufwerke/Reihenfolge können diese ändern.
-- **Linux:** `machine-id`, `product_uuid` (VMs), `board_serial`, CPU-Seriennummer (nur physisch). Klonen, Neuinstallation oder anderes `/etc/machine-id` ändert den Schlüssel.
+  - **Windows:** Der „aktive“ Adapter ist der mit Standardgateway
+   (`ipconfig /all`). Wechsel (VPN an/aus, anderer NIC, WLAN vs. LAN) oder
+   fehlgeschlagene Erkennung → Fallback „erste MAC (sortiert)“; die Reihenfolge
+   der Interfaces kann sich ändern → andere MAC.  
+  - **Linux:** Es wird die Schnittstelle für `ip route get 8.8.8.8` genutzt.
+    Ändert sich das (z. B. VPN, zweite NIC) oder greift der Fallback
+    „erste MAC (sortiert)“, kann sich die MAC ändern.
+- **Windows:** MachineGuid (VMs), SMBIOS-UUID (VMs), Baseboard-Seriennummer/
+  Produkt, Festplatten-Seriennummer (erste nach Sortierung), CPU ProcessorId
+  (nur physisch). Neuinstallation, Sysprep oder geänderte Laufwerke/Reihenfolge
+  können diese ändern.
+- **Linux:** `machine-id`, `product_uuid` (VMs), `board_serial`, CPU-Seriennummer
+  (nur physisch). Klonen, Neuinstallation oder anderes `/etc/machine-id` ändert
+  den Schlüssel.
 
 ### So debuggen Sie
 
 1. **Aktuelle Hardware-ID und alle Eingaben ausgeben (ohne Config-Datei):**
+
    ```go
    id, err := sconfig.DebugHardwareID()
    // Alle Identifikatoren und die finale ID gehen nach stderr.
    ```
+
 2. **Oder** `LoadConfig` mit Debug aufrufen:
+
    ```go
    err := sconfig.LoadConfig(&cfg, version, path, false, true) // 5. Parameter = debugOutput
    ```
+
    Dieselben Debug-Zeilen gehen nach stderr.
 
-3. Einmal ausführen, wenn der Schlüssel „falsch“ ist, und stderr speichern. Mit einem Lauf vergleichen, in dem der Schlüssel „richtig“ war (oder auf einer anderen Maschine). Die Zeilen `[sconfig DEBUG]` zeigen VM-Erkennung, verwendete MAC und jeden Identifikator vor dem Hashing; die abweichende(n) Zeile(n) sind die Ursache.
+3. Einmal ausführen, wenn der Schlüssel „falsch“ ist, und stderr speichern. Mit
+   einem Lauf vergleichen, in dem der Schlüssel „richtig“ war (oder auf einer
+   anderen Maschine). Die Zeilen `[sconfig DEBUG]` zeigen VM-Erkennung,
+   verwendete MAC und jeden Identifikator vor dem Hashing; die abweichende(n)
+   Zeile(n) sind die Ursache.
+
+4. **Hardware-ID-Track**: Bei aktiviertem Debug wird jede Hardware-ID-Berechnung
+   und jeder Entschlüsselungsfehler als Zeile in `sconfig.debug.json` im
+   Verzeichnis des Executables geschrieben. Format:
+   `Datum<TAB>Uhrzeit<TAB>Hardware-ID<TAB>Identifikatoren`. So entsteht eine
+   Chronik der IDs (z. B. nach einem fehlgeschlagenen Entschlüsseln).
 
 ## Sicherheitshinweise
 
-- **Rechnergebundene Verschlüsselung**: Passwörter werden mit Schlüsseln verschlüsselt, die aus Hardware-Identifikatoren abgeleitet werden, wodurch verschlüsselte Konfigurationsdateien auf anderen Systemen unbrauchbar sind
-- **Transparente Entschlüsselung**: Passwörter werden automatisch im Speicher entschlüsselt für einfachen Zugriff
-- **`cleanConfig` mit Vorsicht verwenden**: Setzen von `cleanConfig = true` schreibt Klartext-Passwörter in die Datei
-- **Hardware-ID**: Der Verschlüsselungsschlüssel wird aus System-Hardware-Identifikatoren generiert (MAC-Adresse, CPU-ID, etc.)
+- **Rechnergebundene Verschlüsselung**: Passwörter werden mit Schlüsseln
+  verschlüsselt, die aus Hardware-Identifikatoren abgeleitet werden, wodurch
+  verschlüsselte Konfigurationsdateien auf anderen Systemen unbrauchbar sind
+- **Transparente Entschlüsselung**: Passwörter werden automatisch im Speicher
+  entschlüsselt für einfachen Zugriff
+- **`cleanConfig` mit Vorsicht verwenden**: Setzen von `cleanConfig = true`
+  schreibt Klartext-Passwörter in die Datei
+- **Hardware-ID**: Der Verschlüsselungsschlüssel wird aus System-Hardware-
+  Identifikatoren generiert (MAC-Adresse, CPU-ID, etc.)
 
 ## Spenden (Donationware)
 
-Dieses Projekt ist Donation-Ware. Wenn es dir hilft, spende bitte an die CFI Kinderhilfe und unterstütze damit Kinder in Not:
+Dieses Projekt ist Donation-Ware. Wenn es dir hilft, spende bitte an die
+CFI Kinderhilfe und unterstütze damit Kinder in Not:
 
 - Jetzt spenden: [Spendenseite von CFI Kinderhilfe](https://cfi-kinderhilfe.de/jetzt-spenden/?q=VAYASCFG)
 

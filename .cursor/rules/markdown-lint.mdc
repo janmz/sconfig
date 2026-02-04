@@ -1,0 +1,22 @@
+---
+description: Markdown fehlerfrei erzeugen (markdownlint)
+globs: "**/*.md"
+alwaysApply: false
+---
+
+# Markdown ohne Linter-Fehler
+
+Beim Erzeugen oder Bearbeiten von Markdown-Dateien (`.md`) gelten die Projekt-Regeln
+so, dass **markdownlint** keine Fehler meldet.
+
+## Konkret
+
+- **Zeilenlänge (MD013)**: Prosa-Zeilen maximal 80 Zeichen; bei Bedarf umbrechen.
+  In \`\`\`-Codeblöcken wird die Zeilenlänge ignoriert (siehe `.markdownlint.json`).
+- **Doppelte Überschriften (MD024)**: Sind im Projekt deaktiviert (z. B. Changelog
+  „Added“/„Fixed“).
+- **Leerzeilen**: Listen und Code-Blöcke mit Leerzeilen umgeben (MD031/MD032).
+- **Links**: Keine „bare URLs“; Links in `[Text](URL)` setzen (MD034).
+
+Die genaue Konfiguration steht in `.markdownlint.json`. Nach Änderungen an `.md`
+sollten keine markdownlint-Warnungen mehr offen sein.
