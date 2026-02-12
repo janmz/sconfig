@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.11.24] - 2026-02-12
+
+### Changed
+
+- **Repository-Bereinigung**: `.cursor/`, `*.syso` und `vaya.ico` werden nicht mehr
+  versioniert. Einträge in `.gitignore` ergänzt. Bestehende getrackte Vorkommen
+  mit `git rm -r --cached .cursor`, `git rm --cached vaya.ico` aus dem Index
+  entfernen (einmalig, wenn kein anderes Git-Prozess läuft).
+
+---
+
 ## [1.2.10.22] - 2026-02-03
 
 ### Added

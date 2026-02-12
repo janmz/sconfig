@@ -3,6 +3,8 @@
 /makefile
 *.syso
 *.bak
+/.cursor/
+/vaya.ico
 **/.env
 **/.env.*
 go.sum
