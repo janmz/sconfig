@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.13.34 (in version.go zu ändern)
+ * Version: 1.2.14.35 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  22.02.26	1.2.14	Fix: output config file path in debug mode
  *  22.02.26	1.2.13	Fix: Recreated math/rand from go 1.23.0
  *  22.02.26	1.2.12	Fix: Updated to go 1.25
  *  04.02.26	1.2.11	Feature: Added tracking of hardware IDs
@@ -891,6 +892,15 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 		file, err = os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf(t("config.read_failed"), err)
+		}
+		if debugOutput {
+			// Den absoluten Pfad aus path ermitteln (das ist identisch zu der gelesenen Datei)
+			absPath, absErr := filepath.Abs(path)
+			if absErr != nil {
+				fmt.Fprintf(os.Stderr, "%s %v\n", t("config.debug_file_abs_path_error"), absErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "%s %s\n", t("config.debug_file_abs_path"), absPath)
+			}
 		}
 	} else {
 		file = []byte("{}")
