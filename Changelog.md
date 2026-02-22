@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.12.33] - 2026-02-12
+
+### Fixed
+
+- **Schlüsselableitung unabhängig von Go-Version:** Nach dem Wechsel auf neuere
+  Go-Toolchains (z. B. 1.25) lieferte die bisherige Nutzung von
+  `math/rand.NewSource(hardwareID)` andere Bytes und bestehende Config-Dateien
+  konnten nicht mehr entschlüsselt werden. Die Schlüsselableitung verwendet jetzt
+  einen eingebetteten, mit Go 1.23 identischen RNG (Mitchell/Reeds) in
+  `key_rand_go123.go`. Derselbe Seed (Hardware-ID) erzeugt damit wieder die
+  gleichen 32 Key-Bytes unabhängig von der Go-Version; bestehende Configs bleiben
+  lesbar.
+
+---
+
+## [1.2.12.32] - 2026-02-12
+
+### Fixed
+
+- **Decrypt-Fehlermeldung:** Einheitliche Sprache pro Locale (DE/EN); technische
+  Go-Meldung wird als „Technische Meldung: %v“ getrennt ausgewiesen, um
+  Sprachmix zu vermeiden. Passwortfeldname wird immer angezeigt; bei leerem
+  Präfix (z. B. Feld „SecurePassword“) erscheint „(Feldname unbekannt)“ bzw.
+  „(unknown field)“.
+
+---
+
 ## [1.2.11.30] - 2026-02-12
 
 ### Changed

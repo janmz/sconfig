@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.12.31 (in version.go zu ändern)
+ * Version: 1.2.13.34 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  22.02.26	1.2.13	Fix: Recreated math/rand from go 1.23.0
  *  22.02.26	1.2.12	Fix: Updated to go 1.25
  *  04.02.26	1.2.11	Feature: Added tracking of hardware IDs
  *  03.02.26	1.2.10	Feature: Corrected error message for failed decryption
@@ -33,7 +34,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	mathRand "math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -953,12 +953,11 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
  * For transferring files of the first version of this application, an old,
  * insecure key generation procedure can also be used.
  *
- * Intentional use of math/rand (not crypto/rand): The same hardware ID must
- * always produce the same encryption key so that config files remain
- * decryptable on the same machine. Security is provided by the hardware-derived
- * input being unknowable to anyone without full access to the machine the code
- * runs on; the PRNG is used only for deterministic expansion of that secret
- * seed into 32 key bytes. See securityreport.md and SECURITY.md.
+ * Key bytes are derived with a Go-1.23-compatible RNG (see key_rand_go123.go)
+ * so that the same hardware ID yields the same key on all Go versions and
+ * existing config files remain decryptable. Security is provided by the
+ * hardware-derived input being unknowable without full machine access.
+ * See securityreport.md and SECURITY.md.
  */
 func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 	debugMode = debugOutput
@@ -971,11 +970,12 @@ func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 		if debugOutput {
 			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID used for key generation: %d (0x%016x)\n", hardwareID, hardwareID)
 		}
-		// Deterministic expansion: same seed => same key (required for same-machine decrypt)
-		randGenSeeded := mathRand.NewSource(int64(hardwareID))
+		// Deterministic expansion: same seed => same key (required for same-machine decrypt).
+		// Use Go-1.23-compatible RNG (key_rand_go123.go) so key is stable across Go versions.
+		keyRNG := newGo123KeySource(int64(hardwareID))
 		encryptionKey = make([]byte, 32)
 		for i := range encryptionKey {
-			encryptionKey[i] = byte(randGenSeeded.Int63() >> 16 & 0xff)
+			encryptionKey[i] = byte(keyRNG.Int63() >> 16 & 0xff)
 		}
 		if debugOutput {
 			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Encryption key (32 bytes): %x\n", encryptionKey)
@@ -1162,8 +1162,12 @@ func decodePasswords(v reflect.Value) error {
 							if debugMode {
 								writeDebugLog(lastDebugHardwareID, lastDebugIdentifiers, false)
 							}
-							// Pass pw_prefix and err so the format string "failed to decrypt %s password: %v" gets both values
-							return fmt.Errorf("%s", t("config.decrypt_failed", pw_prefix, err))
+							// Always show a field name (use translated fallback if prefix empty)
+							fieldName := pw_prefix
+							if fieldName == "" {
+								fieldName = t("config.unknown_password_field")
+							}
+							return fmt.Errorf("%s", t("config.decrypt_failed", fieldName, err))
 						}
 						field2Value.SetString(password)
 						break

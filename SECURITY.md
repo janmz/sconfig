@@ -7,8 +7,9 @@ The latest release and the `main` branch receive security updates.
 ## Design: hardware-bound encryption key
 
 The encryption key is derived **deterministically** from a hardware-derived ID
-(Go: `math/rand.NewSource(hardwareID)`, PHP: `mt_srand($hardwareId)` +
-`mt_rand()`). This is **intentional**: the same machine must always produce the
+(Go: Go-1.23-compatible RNG in `key_rand_go123.go` so the key is stable across
+toolchain versions; PHP: `mt_srand($hardwareId)` + `mt_rand()`). This is
+**intentional**: the same machine must always produce the
 same key so that config files remain decryptable. Security is provided by the
 fact that the input (hardware identifiers) cannot be guessed by anyone without
 full access to the machine the code runs on; the PRNG is used only to expand
