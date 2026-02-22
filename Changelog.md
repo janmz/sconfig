@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.14.37] - 2026-02-12
+
+### Added
+
+- **Diagnose: Mit welchem Key wurde verschlüsselt?** Neue Datei `diagnose_decrypt.go`
+  mit exportierten Hilfsfunktionen, um bei bekanntem Ciphertext und bekanntem
+  Klartext den verwendeten Schlüssel zu identifizieren: `KeyFromHardwareID(hwID)`
+  leitet den 32-Byte-Key ab (go123-RNG), `DecryptWithKey(ciphertextBase64, key)`
+  entschlüsselt mit einem beliebigen Key, `TryDecryptWithCandidates(ciphertext,
+  expectedPlaintext, candidateHardwareIDs)` probiert Kandidaten durch und
+  liefert die passende Hardware-ID bzw. false. So kann man z. B. prüfen, ob
+  mit anderer Identifier-Reihenfolge oder anderer Maschine verschlüsselt wurde.
+
+---
+
+## [1.2.14.36] - 2026-02-12
+
+### Added
+
+- **Tests für Schlüssel-/Entschlüsselungs-Varianten:** In `sconfig_test.go` wurden
+  Tests ergänzt, die mit `go test -v ./...` auf dem Production-Server klare
+  Ausgaben erzeugen: (1) Go-1.23-RNG-Determinismus (gleicher Seed → gleicher
+  Key, inkl. Hex-Ausgabe), (2) Identifier-Reihenfolge (A|B vs. B|A liefern
+  unterschiedliche Hardware-IDs und Schlüssel; Entschlüsselung mit falscher
+  Reihenfolge schlägt erwartungsgemäß fehl), (3) Roundtrip Verschlüsseln/
+  Entschlüsseln mit fester Hardware-ID, (4) Ciphertext-Integrität (Base64-Länge,
+  decodierte Länge). Zusätzlich: `ResetForTest()` zum Zurücksetzen des
+  Package-Zustands, damit Tests mit wechselnder Hardware-ID möglich sind.
+
+---
+
 ## [1.2.12.33] - 2026-02-12
 
 ### Fixed

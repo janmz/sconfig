@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.14.35 (in version.go zu ändern)
+ * Version: 1.2.15.38 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  22.02.26	1.2.15	Fix: removed decryption debugging
  *  22.02.26	1.2.14	Fix: output config file path in debug mode
  *  22.02.26	1.2.13	Fix: Recreated math/rand from go 1.23.0
  *  22.02.26	1.2.12	Fix: Updated to go 1.25
@@ -982,7 +983,7 @@ func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 		}
 		// Deterministic expansion: same seed => same key (required for same-machine decrypt).
 		// Use Go-1.23-compatible RNG (key_rand_go123.go) so key is stable across Go versions.
-		keyRNG := newGo123KeySource(int64(hardwareID))
+		keyRNG := newGo123KeySource(int64(hardwareID & 0x7fffffffffffffff))
 		encryptionKey = make([]byte, 32)
 		for i := range encryptionKey {
 			encryptionKey[i] = byte(keyRNG.Int63() >> 16 & 0xff)
@@ -1003,6 +1004,12 @@ func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 		}
 	}
 	initialized = true
+}
+
+// ResetForTest clears the package-initialized state so the next LoadConfig
+// will derive the key again from the given hardware-ID function. For tests only.
+func ResetForTest() {
+	initialized = false
 }
 
 /*

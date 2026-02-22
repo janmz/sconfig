@@ -1,6 +1,8 @@
 package sconfig
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -686,6 +688,154 @@ func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
 			ts.Errorf("Expected decrypted password to be 'consistent-password', got '%s'", config2.DatabasePassword)
 		}
 	})
+}
+
+// hardwareIDFromCombined computes the same uint64 hardware ID as sconfig from
+// the combined identifiers string (e.g. "id1|id2").
+func hardwareIDFromCombined(combined string) uint64 {
+	h := sha256.Sum256([]byte(combined))
+	return uint64(h[0])<<56 | uint64(h[1])<<48 | uint64(h[2])<<40 |
+		uint64(h[3])<<32 | uint64(h[4])<<24 | uint64(h[5])<<16 |
+		uint64(h[6])<<8 | uint64(h[7])
+}
+
+// TestGo123KeySource_Determinism verifies that the Go 1.23–compatible key source
+// produces the same 32-byte key for the same seed (for debugging production key).
+func TestGo123KeySource_Determinism(ts *testing.T) {
+	// Use a seed that fits in int64 (same type as newGo123KeySource(seed))
+	seed := int64(1641999738339490542)
+	rng1 := newGo123KeySource(seed)
+	rng2 := newGo123KeySource(seed)
+	var key1, key2 [32]byte
+	for i := range key1 {
+		key1[i] = byte(rng1.Int63()>>16) & 0xff
+		key2[i] = byte(rng2.Int63()>>16) & 0xff
+	}
+	if key1 != key2 {
+		ts.Fatal("go123KeySource: same seed produced different keys")
+	}
+	ts.Logf("Variant: go123 key determinism — seed %d → key (hex): %x", seed, key1)
+}
+
+// TestIdentifierOrder_DifferentKeys verifies that different identifier order
+// produces different hardware IDs and different keys; decrypt only works with
+// the same order used for encryption.
+func TestIdentifierOrder_DifferentKeys(ts *testing.T) {
+	combinedAB := "00:11:32:ca:c5:2f|123456789"
+	combinedBA := "123456789|00:11:32:ca:c5:2f"
+	hwAB := hardwareIDFromCombined(combinedAB)
+	hwBA := hardwareIDFromCombined(combinedBA)
+	if hwAB == hwBA {
+		ts.Fatalf("identifier order must yield different hardware IDs: both %d", hwAB)
+	}
+	ts.Logf("Variant: identifier order — combined A|B → hwID %d, B|A → hwID %d", hwAB, hwBA)
+
+	tempDir := ts.TempDir()
+	pathAB := filepath.Join(tempDir, "order_ab.json")
+
+	// Encrypt with order A|B
+	cfgAB := &TestConfig{DatabasePassword: "secret-order-ab"}
+	getHWAB := func() (uint64, error) { return hwAB, nil }
+	err := LoadConfig(cfgAB, 1, pathAB, false, false, getHWAB)
+	if err != nil {
+		ts.Fatalf("LoadConfig with order A|B failed: %v", err)
+	}
+	if cfgAB.DatabaseSecurePassword == "" {
+		ts.Fatal("DatabaseSecurePassword empty after encrypt (A|B)")
+	}
+	ts.Logf("Variant: encrypted with A|B (hwID %d); ciphertext length %d", hwAB, len(cfgAB.DatabaseSecurePassword))
+
+	// Decrypt with same order A|B → must succeed
+	cfgDecAB := &TestConfig{
+		DatabasePassword:       cfgAB.DatabasePassword,
+		DatabaseSecurePassword: cfgAB.DatabaseSecurePassword,
+	}
+	err = LoadConfig(cfgDecAB, 1, pathAB, false, false, getHWAB)
+	if err != nil {
+		ts.Fatalf("decrypt with same order A|B failed: %v", err)
+	}
+	if cfgDecAB.DatabasePassword != "secret-order-ab" {
+		ts.Errorf("decrypt A|B: expected 'secret-order-ab', got %q", cfgDecAB.DatabasePassword)
+	}
+	ts.Logf("Variant: decrypt with same order A|B → OK")
+
+	// Decrypt with order B|A → must fail (wrong key). Use same file pathAB
+	// so we actually try to decrypt the A|B ciphertext with the B|A key.
+	// Reset package state so the next LoadConfig uses the B|A key.
+	ResetForTest()
+	getHWBA := func() (uint64, error) { return hwBA, nil }
+	cfgDecBA := &TestConfig{}
+	err = LoadConfig(cfgDecBA, 1, pathAB, false, false, getHWBA)
+	if err == nil {
+		ts.Fatal("decrypt with order B|A must fail (different key)")
+	}
+	ts.Logf("Variant: decrypt with order B|A → failed as expected: %v", err)
+}
+
+// TestRoundtrip_EncryptDecrypt verifies encrypt-then-decrypt with a fixed
+// hardware ID and prints a clear result for production runs.
+func TestRoundtrip_EncryptDecrypt(ts *testing.T) {
+	const plain = "roundtrip-test-value"
+	hwID := hardwareIDFromCombined("single-identifier")
+	tempDir := ts.TempDir()
+	configPath := filepath.Join(tempDir, "roundtrip.json")
+
+	getHW := func() (uint64, error) { return hwID, nil }
+	cfg := &TestConfig{DatabasePassword: plain}
+	if err := LoadConfig(cfg, 1, configPath, false, false, getHW); err != nil {
+		ts.Fatalf("roundtrip encrypt failed: %v", err)
+	}
+	if cfg.DatabaseSecurePassword == "" {
+		ts.Fatal("DatabaseSecurePassword empty after encrypt")
+	}
+
+	cfg2 := &TestConfig{
+		DatabasePassword:       cfg.DatabasePassword,
+		DatabaseSecurePassword: cfg.DatabaseSecurePassword,
+	}
+	if err := LoadConfig(cfg2, 1, configPath, false, false, getHW); err != nil {
+		ts.Fatalf("roundtrip decrypt failed: %v", err)
+	}
+	if cfg2.DatabasePassword != plain {
+		ts.Errorf("roundtrip: expected %q, got %q", plain, cfg2.DatabasePassword)
+	}
+	ts.Logf("Variant: roundtrip encrypt/decrypt → OK (plaintext %d bytes)", len(plain))
+}
+
+// TestCiphertextIntegrity reads back the saved config and checks that the
+// secure password field is valid base64 and has expected minimal length
+// (nonce + tag), for debugging production decryption failures.
+func TestCiphertextIntegrity(ts *testing.T) {
+	hwID := hardwareIDFromCombined("integrity-test")
+	tempDir := ts.TempDir()
+	configPath := filepath.Join(tempDir, "integrity.json")
+
+	getHW := func() (uint64, error) { return hwID, nil }
+	cfg := &TestConfig{DatabasePassword: "integrity-secret"}
+	if err := LoadConfig(cfg, 1, configPath, false, false, getHW); err != nil {
+		ts.Fatalf("save for integrity test failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		ts.Fatalf("read config file: %v", err)
+	}
+	var onDisk struct {
+		DatabaseSecurePassword string `json:"database_secure_password"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		ts.Fatalf("unmarshal config: %v", err)
+	}
+	cipherB64 := onDisk.DatabaseSecurePassword
+	decoded, err := base64.StdEncoding.DecodeString(cipherB64)
+	if err != nil {
+		ts.Fatalf("DatabaseSecurePassword is not valid base64: %v", err)
+	}
+	// GCM: 12-byte nonce + ciphertext + 16-byte tag
+	if len(decoded) < 12+16 {
+		ts.Errorf("ciphertext too short: %d bytes (expect at least 28)", len(decoded))
+	}
+	ts.Logf("Variant: ciphertext integrity — base64 len %d, decoded len %d (nonce+tag+cipher)", len(cipherB64), len(decoded))
 }
 
 // Helper function to check if a string contains a substring that matches to a template
