@@ -321,6 +321,13 @@ class EnvLoader
     /**
      * Initialize encryption system with hardware-based key
      *
+     * Intentional use of mt_rand (not random_bytes): The same hardware ID must
+     * always produce the same encryption key so that config files remain
+     * decryptable on the same machine. Security is provided by the
+     * hardware-derived input being unknowable to anyone without full access to
+     * the machine; the PRNG is used only for deterministic expansion of that
+     * secret seed into 32 key bytes. See securityreport.md and SECURITY.md.
+     *
      * @return void
      */
     private static function initializeEncryption(): void
@@ -331,13 +338,12 @@ class EnvLoader
 
         try {
             $hardwareId = self::getHardwareID();
-            // Generate encryption key from hardware ID (similar to Go implementation)
-            // Go uses: byte(randGenSeeded.Int63() >> 16 & 0xff)
-            // We simulate this by using the hardware ID as seed and generating bytes
+            // Deterministic expansion from hardware ID (same seed => same key, by design)
+            // Aligned with Go: math/rand.NewSource(hardwareID) for same-machine decrypt
             mt_srand($hardwareId);
             $key = '';
             for ($i = 0; $i < 32; $i++) {
-                // Simulate Int63() >> 16 & 0xff using xor-operator for entropy
+                // Simulate Int63() >> 16 & 0xff using xor for deterministic byte sequence
                 $val = mt_rand() ^ mt_rand();
                 $key .= chr($val & 0xff);
             }

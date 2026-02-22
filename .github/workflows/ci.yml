@@ -43,3 +43,28 @@ jobs:
 
       - name: Test
         run: go test ./... -v
+
+  composer-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer
+
+      - name: Composer audit (root)
+        run: |
+          if [ -f composer.json ]; then
+            composer install --no-interaction --prefer-dist --no-progress
+            composer audit
+          fi
+
+      - name: Composer audit (php/)
+        run: |
+          if [ -f php/composer.json ]; then
+            cd php && composer install --no-interaction --prefer-dist --no-progress && composer audit
+          fi

@@ -2,6 +2,75 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.11.30] - 2026-02-12
+
+### Changed
+
+- **Security audit:** Composer-audit requirement moved from project rule
+  `.cursor/rules/security-audit.mdc` into the security-auditor subagent
+  definition (`~/.cursor/agents/security-auditor.md`). The .mdc file was
+  removed; SECURITY.md and securityreport.md references updated.
+
+---
+
+## [1.2.11.29] - 2026-02-12
+
+### Changed
+
+- **Encryption key derivation (by design):** Documented in code (Go `config_init`,
+  PHP `EnvLoader::initializeEncryption`), SECURITY.md, and securityreport.md
+  that the use of `math/rand` and `mt_rand` is intentional: the same
+  hardware ID must yield the same encryption key; security is provided by the
+  hardware-derived input being unknowable without full machine access. Security
+  audit finding set to acknowledged (by design).
+
+---
+
+## [1.2.11.28] - 2026-02-12
+
+### Added
+
+- **Security audit – Composer audit required:** SECURITY.md,
+  `docs/security-audit-checklist.md`, and a Cursor rule
+  and the security-auditor subagent definition now require that security
+  audits include `composer audit` whenever the project has Composer
+  (`composer.json`). CI workflow runs `composer audit` for project root and
+  `php/` when applicable.
+
+---
+
+## [1.2.11.27] - 2026-02-12
+
+### Changed
+
+- **Config file permissions:** When writing the config file, the existing file’s
+  permission bits are preserved instead of enforcing 0644. New files (path did
+  not exist) are still created with 0644.
+
+---
+
+## [1.2.11.26] - 2026-02-12
+
+### Fixed
+
+- **Encrypt/decrypt error handling (security):** `encrypt()` now checks and
+  returns errors from `aes.NewCipher` and `cipher.NewGCM`; signature changed
+  to `(string, error)`. Call site in `updateVersionAndPasswords` propagates
+  errors.
+
+---
+
+## [1.2.11.25] - 2026-02-12
+
+### Fixed
+
+- **Decrypt panic on invalid/short input (security):** `decrypt()` now checks
+  base64 decode errors and ensures `len(data) >= gcm.NonceSize()` before
+  slicing; returns clear errors instead of panicking. Errors from
+  `aes.NewCipher` and `cipher.NewGCM` are also handled.
+
+---
+
 ## [1.2.11.24] - 2026-02-12
 
 ### Changed

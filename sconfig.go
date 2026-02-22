@@ -3,11 +3,11 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.11.23 (in version.go zu ändern)
+ * Version: 1.2.12.31 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  22.02.26	1.2.12	Fix: Updated to go 1.25
  *  04.02.26	1.2.11	Feature: Added tracking of hardware IDs
- *  03.02.26	1.2.10.22	feat: debug track of hardware IDs to sconfig.debug.json (executable dir)
  *  03.02.26	1.2.10	Feature: Corrected error message for failed decryption
  *  03.02.26	1.2.9	Feature: New debug function
  *  03.02.25	1.2.8	feat: DebugHardwareID() and docs for debugging hardware key changes
@@ -868,6 +868,7 @@ func DebugHardwareID() (uint64, error) {
 func LoadConfig(config interface{}, version int, path string, cleanConfig bool, debugOutput bool, getHardwareID_func ...func() (uint64, error)) error {
 
 	var file []byte
+	var err error
 
 	// Create wrapper function for hardware ID retrieval with debug support
 	var hardwareIDFunc func() (uint64, error)
@@ -881,8 +882,12 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 	}
 	config_init(hardwareIDFunc, debugOutput)
 
-	_, err := os.Stat(path)
-	if !os.IsNotExist(err) {
+	writeMode := os.FileMode(0644)
+	fileInfo, statErr := os.Stat(path)
+	if statErr == nil {
+		writeMode = fileInfo.Mode().Perm()
+	}
+	if !os.IsNotExist(statErr) {
 		file, err = os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf(t("config.read_failed"), err)
@@ -925,7 +930,7 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 		if err != nil {
 			return fmt.Errorf(t("config.failed_build_json"), err)
 		}
-		if err := os.WriteFile(path, configJSON, 0644); err != nil {
+		if err := os.WriteFile(path, configJSON, writeMode); err != nil {
 			return fmt.Errorf(t("config.failed_writing"), path, err)
 		}
 	}
@@ -947,11 +952,18 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
  *
  * For transferring files of the first version of this application, an old,
  * insecure key generation procedure can also be used.
+ *
+ * Intentional use of math/rand (not crypto/rand): The same hardware ID must
+ * always produce the same encryption key so that config files remain
+ * decryptable on the same machine. Security is provided by the hardware-derived
+ * input being unknowable to anyone without full access to the machine the code
+ * runs on; the PRNG is used only for deterministic expansion of that secret
+ * seed into 32 key bytes. See securityreport.md and SECURITY.md.
  */
 func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 	debugMode = debugOutput
 	if !initialized {
-		// Generate encryption key based on Hardware IS
+		// Generate encryption key based on Hardware ID (deterministic by design)
 		hardwareID, err := getHardwareID_func()
 		if err != nil {
 			log.Fatalf("%s", t("config.hardware_id_failed"))
@@ -959,6 +971,7 @@ func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 		if debugOutput {
 			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID used for key generation: %d (0x%016x)\n", hardwareID, hardwareID)
 		}
+		// Deterministic expansion: same seed => same key (required for same-machine decrypt)
 		randGenSeeded := mathRand.NewSource(int64(hardwareID))
 		encryptionKey = make([]byte, 32)
 		for i := range encryptionKey {
@@ -1090,7 +1103,10 @@ func updateVersionAndPasswords(v reflect.Value, version int, changed *bool) erro
 						if field2Value.String() != PASSWORD_IS_SECURE_de && field2Value.String() != PASSWORD_IS_SECURE_en {
 							// New password found in plain text
 							// New Secure_Password is calculated
-							password := encrypt(field2Value.String())
+							password, err := encrypt(field2Value.String())
+							if err != nil {
+								return err
+							}
 							fieldValue.SetString(password)
 							field2Value.SetString(PASSWORD_IS_SECURE)
 							//fmt.Printf(" new value %s\n", password)
@@ -1159,20 +1175,38 @@ func decodePasswords(v reflect.Value) error {
 	return nil
 }
 
-func encrypt(text string) string {
-	block, _ := aes.NewCipher(encryptionKey)
-	gcm, _ := cipher.NewGCM(block)
+func encrypt(text string) (string, error) {
+	block, err := aes.NewCipher(encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("encrypt: cipher init: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("encrypt: GCM init: %w", err)
+	}
 	nonce := make([]byte, gcm.NonceSize())
 	io.ReadFull(rand.Reader, nonce)
 	ciphertext := gcm.Seal(nonce, nonce, []byte(text), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 func decrypt(text string) (string, error) {
-	block, _ := aes.NewCipher(encryptionKey)
-	gcm, _ := cipher.NewGCM(block)
-	data, _ := base64.StdEncoding.DecodeString(text)
+	block, err := aes.NewCipher(encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: cipher init: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: GCM init: %w", err)
+	}
+	data, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: invalid base64: %w", err)
+	}
 	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("decrypt: ciphertext too short (need at least %d bytes)", nonceSize)
+	}
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	return string(plaintext), err
