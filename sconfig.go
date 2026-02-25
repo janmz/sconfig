@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.15.38 (in version.go zu ändern)
+ * Version: 1.2.16.39 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  25.02.26	1.2.16	Fix: remove masking of negative seeds to positive ones
  *  22.02.26	1.2.15	Fix: removed decryption debugging
  *  22.02.26	1.2.14	Fix: output config file path in debug mode
  *  22.02.26	1.2.13	Fix: Recreated math/rand from go 1.23.0
