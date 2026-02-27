@@ -38,6 +38,14 @@ type TestSliceConfig struct {
 	Servers []TestConfig `json:"servers"`
 }
 
+// UpdateConfigTestConfig is used for UpdateConfig tests (Theme, different path).
+type UpdateConfigTestConfig struct {
+	Version          int    `json:"version"`
+	Theme            string `json:"theme"`
+	DBPassword       string `json:"db_password"`
+	DBSecurePassword string `json:"db_secure_password"`
+}
+
 func TestLoadConfig_Basic(ts *testing.T) {
 	// Create a temporary directory for test files
 	tempDir := ts.TempDir()
@@ -597,6 +605,123 @@ func TestLoadConfig_FilePermissions(ts *testing.T) {
 			ts.Error("Config file should be writable by owner")
 		}
 	})
+}
+
+func TestUpdateConfig_ThemeAndEncryption(ts *testing.T) {
+	tempDir := ts.TempDir()
+	configPath := filepath.Join(tempDir, "theme_config.json")
+	cfg := &UpdateConfigTestConfig{
+		Version: 1,
+		Theme:   "dark",
+		DBPassword: "secret",
+	}
+	// Load first to initialize encryption
+	err := LoadConfig(cfg, 1, configPath, false, false)
+	if err != nil {
+		ts.Fatalf("LoadConfig failed: %v", err)
+	}
+	cfg.Theme = "light"
+	err = UpdateConfig(cfg, configPath)
+	if err != nil {
+		ts.Fatalf("UpdateConfig failed: %v", err)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		ts.Fatalf("ReadFile failed: %v", err)
+	}
+	var onDisk struct {
+		Version          int    `json:"version"`
+		Theme            string `json:"theme"`
+		DBPassword       string `json:"db_password"`
+		DBSecurePassword string `json:"db_secure_password"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		ts.Fatalf("Unmarshal failed: %v", err)
+	}
+	if onDisk.Theme != "light" {
+		ts.Errorf("expected theme=light in file, got %q", onDisk.Theme)
+	}
+	if onDisk.DBSecurePassword == "" {
+		ts.Error("expected db_secure_password to be set (encrypted) in file")
+	}
+	// In-memory password should still be decrypted
+	if cfg.DBPassword != "secret" {
+		ts.Errorf("expected in-memory DBPassword to remain decrypted, got %q", cfg.DBPassword)
+	}
+}
+
+func TestUpdateConfig_CleanConfig(ts *testing.T) {
+	tempDir := ts.TempDir()
+	configPath := filepath.Join(tempDir, "clean_config.json")
+	cfg := &UpdateConfigTestConfig{
+		Version: 1,
+		Theme:   "dark",
+		DBPassword: "secret",
+	}
+	err := LoadConfig(cfg, 1, configPath, false, false)
+	if err != nil {
+		ts.Fatalf("LoadConfig failed: %v", err)
+	}
+	err = UpdateConfig(cfg, configPath, true)
+	if err != nil {
+		ts.Fatalf("UpdateConfig(..., true) failed: %v", err)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		ts.Fatalf("ReadFile failed: %v", err)
+	}
+	var onDisk struct {
+		DBPassword string `json:"db_password"`
+	}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		ts.Fatalf("Unmarshal failed: %v", err)
+	}
+	if onDisk.DBPassword != "secret" {
+		ts.Errorf("expected plaintext db_password in file when cleanConfig=true, got %q", onDisk.DBPassword)
+	}
+}
+
+func TestUpdateConfig_WithoutLoad(ts *testing.T) {
+	ResetForTest()
+	defer func() {
+		// Re-init so other tests are not broken
+		_ = LoadConfig(&TestConfig{}, 1, filepath.Join(ts.TempDir(), "dummy.json"), false, false)
+	}()
+	cfg := &UpdateConfigTestConfig{Version: 1, Theme: "dark"}
+	err := UpdateConfig(cfg, filepath.Join(ts.TempDir(), "out.json"))
+	if err == nil {
+		ts.Fatal("UpdateConfig without prior LoadConfig should return an error")
+	}
+	if !contains(err.Error(), t("config.load_first")) {
+		ts.Errorf("expected config.load_first error, got: %v", err)
+	}
+}
+
+func TestUpdateConfig_DifferentPath(ts *testing.T) {
+	tempDir := ts.TempDir()
+	loadPath := filepath.Join(tempDir, "config.json")
+	writePath := filepath.Join(tempDir, "config.backup.json")
+	cfg := &UpdateConfigTestConfig{Version: 1, Theme: "dark"}
+	err := LoadConfig(cfg, 1, loadPath, false, false)
+	if err != nil {
+		ts.Fatalf("LoadConfig failed: %v", err)
+	}
+	cfg.Theme = "light"
+	err = UpdateConfig(cfg, writePath)
+	if err != nil {
+		ts.Fatalf("UpdateConfig to different path failed: %v", err)
+	}
+	if _, err := os.Stat(writePath); os.IsNotExist(err) {
+		ts.Fatal("config.backup.json should exist")
+	}
+	raw, _ := os.ReadFile(writePath)
+	var onDisk struct {
+		Theme string `json:"theme"`
+	}
+	_ = json.Unmarshal(raw, &onDisk)
+	if onDisk.Theme != "light" {
+		ts.Errorf("expected theme=light in backup file, got %q", onDisk.Theme)
+	}
 }
 
 func TestDebugHardwareID(ts *testing.T) {

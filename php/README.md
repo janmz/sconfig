@@ -114,6 +114,23 @@ use Sconfig\EnvLoader;
 EnvLoader::load('.env', true); // override = true
 ```
 
+### Writing back env changes (updateEnv)
+
+After `load()`, values can be changed with `EnvLoader::set('KEY', 'value')`.
+`updateEnv($filePath)` or `updateEnv($filePath, false)` writes the .env with
+encrypted passwords; `updateEnv($filePath, true)` writes with decrypted passwords.
+
+**Requirement:** `load()` must have been called at least once beforehand; otherwise
+`updateEnv` throws an error.
+
+The .env can be written to a **different path** than the load path (e.g.
+`load('.env')`, then `updateEnv('backup.env')`).
+
+**Example (theme from dark to light):** .env with `THEME=dark`; after `load('.env')`
+the app shows the theme. User selects "light", application calls
+`EnvLoader::set('THEME', 'light')` and then `EnvLoader::updateEnv('.env')` (default
+= encrypted passwords).
+
 ### Clean Config Mode
 
 To decrypt passwords before writing (use with care, primarily for migration or inspection):
@@ -187,6 +204,17 @@ DEBUG=false
 - No external dependencies (PHP 7.4+)
 - AES-256-GCM encryption for secure password storage
 - Translations loaded from `locales/` directory (same as Go version)
+
+## Testing
+
+Run the test suite with PHPUnit (after `composer install`):
+
+```bash
+cd php
+./vendor/bin/phpunit
+```
+
+Tests cover loading/parsing, override/cleanConfig, password encryption (marker on disk, plaintext in memory), and the `env()` helper.
 
 ## API Reference
 

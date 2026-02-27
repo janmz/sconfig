@@ -2,6 +2,47 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.16.41] - 2026-02-27
+
+### Added
+
+- **UpdateConfig (Go):** Exportierte Funktion `UpdateConfig(config, path, cleanConfig...)` zum
+  Zurückschreiben der Config-Datei nach Änderungen (z. B. Theme in der UI). Secure-Felder
+  werden standardmäßig verschlüsselt; optional `cleanConfig=true` für Klartext in der Datei.
+  Voraussetzung: Mindestens einmal `LoadConfig` muss vorher aufgerufen worden sein. Die
+  Config kann unter einem anderen Pfad als dem Lade-Pfad geschrieben werden (z. B. Backup).
+- **updateEnv und set (PHP):** Öffentliche Methoden `EnvLoader::set($key, $value)` und
+  `EnvLoader::updateEnv($filePath, $cleanConfig = false)` zum Setzen von Werten und
+  Zurückschreiben der .env-Datei (z. B. nach Theme-Änderung). Voraussetzung: Zuerst `load()`
+  aufrufen; Schreiben unter anderem Pfad ist erlaubt.
+
+---
+
+## [1.2.16.40] - 2026-02-27
+
+### Added
+
+- **Tests für die PHP-Variante:** PHPUnit-Testsuite für `php/` ergänzt:
+  - `tests/bootstrap.php` setzt Autoload und Locales-Pfad
+  - `tests/EnvLoaderTest.php`: Tests für `EnvLoader::load()` (Datei anlegen, parsen,
+    Anführungszeichen, Kommentare, override, cleanConfig), `get()`/`has()`/`clear()`/
+    `isLoaded()`, Passwort-Verschlüsselung (Marker auf Disk, Klartext in Memory),
+    `env()`-Helper; Test für nicht lesbare Datei (unter Linux, unter Windows
+    übersprungen)
+  - `phpunit.xml.dist` und PHPUnit 9.5 als Dev-Abhängigkeit in `composer.json`
+  - CI-Job erweitert: PHPUnit läuft nach Composer install für `php/`
+
+### Fixed
+
+- **PHP EnvLoader:** Schreiben der .env-Datei erfolgt vor dem Entschlüsseln der
+  Passwörter im Speicher, damit auf Disk nur Marker und verschlüsselte Werte
+  stehen (kein Klartext).
+- **PHP EnvLoader:** Beim erneuten Laden mit `override=false` bleibt der Cache
+  für bereits gesetzte Keys erhalten; nur entschlüsselte Passwort-Keys ersetzen
+  den Marker im Cache.
+
+---
+
 ## [1.2.14.37] - 2026-02-12
 
 ### Added

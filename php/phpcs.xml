@@ -4,6 +4,7 @@
 
     <!-- Check all PHP files in src directory -->
     <file>src</file>
+    <file>tests</file>
     <file>example.php</file>
 
     <!-- Exclude vendor directory -->

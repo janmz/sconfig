@@ -63,8 +63,14 @@ jobs:
             composer audit
           fi
 
-      - name: Composer audit (php/)
+      - name: Composer install and audit (php/)
         run: |
           if [ -f php/composer.json ]; then
             cd php && composer install --no-interaction --prefer-dist --no-progress && composer audit
+          fi
+
+      - name: PHPUnit (php/)
+        run: |
+          if [ -f php/composer.json ] && [ -d php/vendor/bin ]; then
+            cd php && ./vendor/bin/phpunit
           fi

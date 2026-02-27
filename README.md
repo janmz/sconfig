@@ -115,6 +115,26 @@ go build -ldflags "-X github.com/janmz/sconfig.Version=1.2.3 \
   -X github.com/janmz/sconfig.GitCommit=$(git rev-parse --short HEAD)"
 ```
 
+### Writing back config changes (UpdateConfig)
+
+When the application changes config values (e.g. via the UI), it can update the
+struct and write the file back with `UpdateConfig`. Secure fields are encrypted
+or decrypted in the file depending on the optional `cleanConfig` parameter.
+
+**Requirement:** `LoadConfig` must have been called at least once beforehand
+(initialisation/encryption); otherwise `UpdateConfig` returns an error.
+
+The config can be written to a **different path** than the load path (e.g. first
+`LoadConfig(cfg, 1, "config.json", ...)`, then
+`UpdateConfig(cfg, "config.backup.json")`).
+
+**Example (theme from dark to light):** Struct with field `Theme string` and tag
+`json:"theme"`; application loads config with `LoadConfig`, user switches theme
+from "dark" to "light" in the UI, application sets `cfg.Theme = "light"` and calls
+`sconfig.UpdateConfig(cfg, "config.json")` (no third parameter = encrypted secure
+fields in the file). After writing, passwords in the struct remain decrypted (as
+after LoadConfig).
+
 ## PHP Version
 
 ### Features
@@ -205,6 +225,23 @@ use Sconfig\EnvLoader;
 
 EnvLoader::load('.env', true); // override = true
 ```
+
+#### Writing back env changes (updateEnv)
+
+After `load()`, values can be changed with `EnvLoader::set('KEY', 'value')`.
+`updateEnv($filePath)` or `updateEnv($filePath, false)` writes the .env with
+encrypted passwords; `updateEnv($filePath, true)` writes with decrypted passwords.
+
+**Requirement:** `load()` must have been called at least once beforehand; otherwise
+`updateEnv` throws an error.
+
+The .env can be written to a **different path** than the load path (e.g.
+`load('.env')`, then `updateEnv('backup.env')`).
+
+**Example (theme from dark to light):** .env with `THEME=dark`; after `load('.env')`
+the app shows the theme. User selects "light", application calls
+`EnvLoader::set('THEME', 'light')` and then `EnvLoader::updateEnv('.env')` (default
+= encrypted passwords).
 
 #### Clean Config Mode
 

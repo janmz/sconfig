@@ -16,6 +16,6 @@
   "config.failed_decode_pw":"failed to decode passwords in config entries: %v",
   "config.failed_build_json":"failed to marshal config to JSON: %v",
   "config.failed_writing":"failed to write config to file %s: %v",
-  "config.password_message":"Enter new password here",
+  "config.load_first":"Config must be loaded before it can be written","config.password_message":"Enter new password here",
   "config.read_failed": "failed to read config file: %v"  
 }

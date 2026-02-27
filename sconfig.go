@@ -3,9 +3,11 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 1.2.16.39 (in version.go zu ändern)
+ * Version: 2.0.0.42 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  27.02.26	2.0.0	Feature: Introduce UpdateConfig and updateEnv to update the files after changes
+ *  27.02.26	1.2.16	Feature: UpdateConfig() to write config after changes (e.g. theme)
  *  25.02.26	1.2.16	Fix: remove masking of negative seeds to positive ones
  *  22.02.26	1.2.15	Fix: removed decryption debugging
  *  22.02.26	1.2.14	Fix: output config file path in debug mode
@@ -27,6 +29,7 @@ package sconfig
  *
  * Functions:
  * - LoadConfig(): Loads the configuration from a file and processes it, it may rewrite it to encode passwords.
+ * - UpdateConfig(): Writes the config struct to a file; requires LoadConfig to have been called first. Secure fields are encrypted in the file unless cleanConfig is true. Path may differ from the one used in LoadConfig (e.g. backup).
  *
  * Dependencies:
  * - i18n.go and locales/*.json: For internationalization of error messages
@@ -953,6 +956,83 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 		}
 	}
 	return nil
+}
+
+// UpdateConfig writes the config struct to the given path. Secure password
+// fields are encrypted in the file unless cleanConfig is true (then plaintext).
+// LoadConfig must have been called at least once before; otherwise UpdateConfig
+// returns an error. The path may differ from the one used in LoadConfig (e.g.
+// write to a backup file). Example: after the user changes the theme from "dark"
+// to "light" in the UI, set cfg.Theme = "light" and call UpdateConfig(cfg, "config.json").
+func UpdateConfig(config interface{}, path string, cleanConfig ...bool) error {
+	cleanConfigVal := false
+	if len(cleanConfig) > 0 {
+		cleanConfigVal = cleanConfig[0]
+	}
+	if !initialized {
+		return fmt.Errorf("%s", t("config.load_first"))
+	}
+	configValue := reflect.ValueOf(config)
+	if configValue.Kind() == reflect.Ptr {
+		configValue = configValue.Elem()
+	} else {
+		return fmt.Errorf("%s", t("config.config_no_struct"))
+	}
+	if configValue.Kind() != reflect.Struct {
+		return fmt.Errorf("%s", t("config.config_no_struct"))
+	}
+	writeMode := os.FileMode(0644)
+	if fileInfo, err := os.Stat(path); err == nil {
+		writeMode = fileInfo.Mode().Perm()
+	}
+	if cleanConfigVal {
+		if err := decodePasswords(reflect.ValueOf(config)); err != nil {
+			return fmt.Errorf(t("config.failed_decode_pw"), err)
+		}
+	} else {
+		version := getStructVersion(configValue)
+		changed := false
+		if err := updateVersionAndPasswords(configValue, version, &changed); err != nil {
+			return err
+		}
+	}
+	configJSON, err := json.MarshalIndent(config, "", "\t")
+	if err != nil {
+		return fmt.Errorf(t("config.failed_build_json"), err)
+	}
+	if err := os.WriteFile(path, configJSON, writeMode); err != nil {
+		return fmt.Errorf(t("config.failed_writing"), path, err)
+	}
+	if !cleanConfigVal {
+		if err := decodePasswords(reflect.ValueOf(config)); err != nil {
+			return fmt.Errorf(t("config.failed_decode_pw"), err)
+		}
+	}
+	return nil
+}
+
+// getStructVersion returns the value of the first "Version" field found in the
+// struct (top-level only), or 0 if not found or not an integer type.
+func getStructVersion(v reflect.Value) int {
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return 0
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Name == "Version" {
+			fv := v.Field(i)
+			switch fv.Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				return int(fv.Int())
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 /*

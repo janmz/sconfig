@@ -114,6 +114,29 @@ Versionsvariablen können via `-ldflags` zur Build-Zeit überschrieben werden:
 go build -ldflags "-X github.com/janmz/sconfig.Version=1.2.3 -X github.com/janmz/sconfig.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/janmz/sconfig.GitCommit=$(git rev-parse --short HEAD)"
 ```
 
+### Config nach Änderungen zurückschreiben (UpdateConfig)
+
+Wenn die Anwendung Werte aus der Config ändert (z. B. über die Oberfläche), kann
+sie die Struct aktualisieren und mit `UpdateConfig` die Datei wieder schreiben.
+Secure-Felder werden dabei je nach Parameter verschlüsselt oder entschlüsselt in
+der Datei gespeichert.
+
+**Voraussetzung:** Es muss zuvor mindestens einmal `LoadConfig` aufgerufen worden
+sein (Initialisierung/Verschlüsselung); andernfalls gibt `UpdateConfig` einen
+Fehler zurück.
+
+Die Config kann unter einem **anderen Pfad** als dem Lade-Pfad geschrieben werden
+(z. B. zuerst `LoadConfig(cfg, 1, "config.json", ...)`, dann
+`UpdateConfig(cfg, "config.backup.json")`).
+
+**Beispiel (Theme von dark auf light):** Struct mit Feld `Theme string` und Tag
+`json:"theme"`; Anwendung lädt die Config mit `LoadConfig`, der Nutzer wechselt
+in der UI von „dark“ auf „light“, die Anwendung setzt `cfg.Theme = "light"` und
+ruft
+`sconfig.UpdateConfig(cfg, "config.json")` auf (ohne dritten Parameter =
+verschlüsselte Secure-Felder in der Datei). Nach dem Schreiben bleiben die Passwörter
+in der Struct weiterhin entschlüsselt (wie nach LoadConfig).
+
 ## PHP-Variante
 
 ### Funktionen
@@ -208,6 +231,23 @@ use Sconfig\EnvLoader;
 
 EnvLoader::load('.env', true); // override = true
 ```
+
+#### Config nach Änderungen zurückschreiben (updateEnv)
+
+Nach `load()` können Werte mit `EnvLoader::set('SCHLUESSEL', 'Wert')` geändert werden.
+`updateEnv($filePath)` bzw. `updateEnv($filePath, false)` schreibt die .env mit
+verschlüsselten Passwörtern zurück, `updateEnv($filePath, true)` mit entschlüsselten.
+
+**Voraussetzung:** Zuerst muss mindestens einmal `load()` aufgerufen worden sein;
+andernfalls löst `updateEnv` einen Fehler aus.
+
+Die .env kann unter einem **anderen Pfad** als dem Lade-Pfad geschrieben werden
+(z. B. `load('.env')`, dann `updateEnv('backup.env')`).
+
+**Beispiel (Theme von dark auf light):** `.env` mit `THEME=dark`; nach `load('.env')`
+zeigt die App das Theme. Nutzer wählt „light“, Anwendung ruft
+`EnvLoader::set('THEME', 'light')` und danach `EnvLoader::updateEnv('.env')` auf
+(Default = verschlüsselte Passwörter).
 
 #### Clean Config Modus
 

@@ -17,9 +17,10 @@ namespace Sconfig;
  *
  * @package Sconfig
  * @author Jan Neuhaus, VAYA Consulting
- * @version 1.1.0
+ * @version 1.2.0
  *
  * Changelog:
+ * 1.2.0 27.02.26 set(), updateEnv(): persist changes (e.g. theme); require load() first; may write to different path
  * 1.1.0 24.11.25 Initial build of the PHP variant of the sconfig library
  * 
  */
@@ -169,20 +170,23 @@ class EnvLoader
             }
         }
 
+        // Write back to file if changed (before decrypting, so file keeps marker + encrypted)
+        if ($changed) {
+            self::writeEnvFile($filePath, $parsed, $lines);
+        }
+
         // Decrypt passwords in memory for transparent access
         if (!$cleanConfig) {
             self::decryptPasswords($parsed);
-            // Update cache with decrypted values
+            // Update cache: always for decrypted password keys (replace marker), else respect override
             foreach ($parsed as $key => $value) {
-                self::$cache[$key] = $value;
-                $_ENV[$key] = $value;
-                putenv("{$key}={$value}");
+                $isPasswordKey = preg_match('/_PASSWORD$/i', $key) && !preg_match('/_SECURE_PASSWORD$/i', $key);
+                if ($override || $isPasswordKey || !isset(self::$cache[$key])) {
+                    self::$cache[$key] = $value;
+                    $_ENV[$key] = $value;
+                    putenv("{$key}={$value}");
+                }
             }
-        }
-
-        // Write back to file if changed
-        if ($changed) {
-            self::writeEnvFile($filePath, $parsed, $lines);
         }
 
         self::$loaded = true;
@@ -696,9 +700,77 @@ class EnvLoader
      */
     public static function has(string $key): bool
     {
-        return isset(self::$cache[$key]) || 
-               isset($_ENV[$key]) || 
+        return isset(self::$cache[$key]) ||
+               isset($_ENV[$key]) ||
                getenv($key) !== false;
+    }
+
+    /**
+     * Set an environment variable (cache and $_ENV/putenv).
+     * Use together with updateEnv() to persist changes to the .env file.
+     * Example: after user changes theme to "light", call set('THEME', 'light') then updateEnv('.env').
+     *
+     * @param string $key The environment variable key
+     * @param string $value The value to set
+     * @return void
+     */
+    public static function set(string $key, string $value): void
+    {
+        self::$cache[$key] = $value;
+        $_ENV[$key] = $value;
+        putenv("{$key}={$value}");
+    }
+
+    /**
+     * Write current cache to .env file. Requires load() to have been called first.
+     * Secure password fields are encrypted in the file unless $cleanConfig is true.
+     * The path may differ from the one used in load() (e.g. backup.env).
+     *
+     * @param string $filePath Path to the .env file to write
+     * @param bool $cleanConfig If true, passwords are written in plaintext (use with care)
+     * @return void
+     * @throws \RuntimeException If load() was not called before, or file cannot be written
+     */
+    public static function updateEnv(string $filePath, bool $cleanConfig = false): void
+    {
+        I18n::initialize();
+        if (!self::$loaded || !self::$encryptionInitialized) {
+            throw new \RuntimeException(I18n::t('config.load_first'));
+        }
+        $lines = [];
+        $parsed = [];
+        if (file_exists($filePath) && is_readable($filePath)) {
+            $lines = file($filePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            if ($lines === false) {
+                $lines = [];
+            } else {
+                foreach ($lines as $line) {
+                    $trimmed = trim($line);
+                    if (empty($trimmed) || strpos($trimmed, '#') === 0) {
+                        continue;
+                    }
+                    if (strpos($line, '=') !== false) {
+                        [$key, $value] = explode('=', $line, 2);
+                        $key = trim($key);
+                        $value = trim($value);
+                        if ((substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
+                            (substr($value, 0, 1) === "'" && substr($value, -1) === "'")) {
+                            $value = substr($value, 1, -1);
+                        }
+                        $parsed[$key] = $value;
+                    }
+                }
+            }
+        }
+        foreach (self::$cache as $key => $value) {
+            $parsed[$key] = $value;
+        }
+        if ($cleanConfig) {
+            self::decryptPasswords($parsed);
+        } else {
+            self::processPasswords($parsed);
+        }
+        self::writeEnvFile($filePath, $parsed, $lines);
     }
 
     /**
