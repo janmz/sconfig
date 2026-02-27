@@ -1,4 +1,4 @@
-module github.com/janmz/sconfig
+module github.com/janmz/sconfig/v2
 
 go 1.25.0
 

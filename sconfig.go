@@ -3,9 +3,10 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 2.0.0.42 (in version.go zu ändern)
+ * Version: 2.0.1.43 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  27.02.26	2.0.1	Fix: introduced the mandatory v2 path for verion 2
  *  27.02.26	2.0.0	Feature: Introduce UpdateConfig and updateEnv to update the files after changes
  *  27.02.26	1.2.16	Feature: UpdateConfig() to write config after changes (e.g. theme)
  *  25.02.26	1.2.16	Fix: remove masking of negative seeds to positive ones
