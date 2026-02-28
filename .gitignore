@@ -3,6 +3,8 @@
 /makefile
 *.syso
 *.bak
+# Cursor IDE: Never commit .cursor (rules, state, etc.)
+.cursor/
 /.cursor/
 /vaya.ico
 **/.env
