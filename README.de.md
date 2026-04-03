@@ -92,7 +92,7 @@ type AppConfig struct {
 
 func main() {
     cfg := &AppConfig{}
-    if err := sconfig.LoadConfig(cfg, 1, "config.json", false); err != nil {
+    if err := sconfig.LoadConfig(cfg, 1, "config.json", false, false); err != nil {
         panic(err)
     }
     fmt.Println("starte auf Port", cfg.Port)
@@ -105,6 +105,13 @@ func main() {
 - Im Speicher wird `DBPassword` automatisch entschlüsselt (wenn `cleanConfig`
   `true` ist wird es, z.B. für den Wechsel auf eine andere Hardware, auch in
   der Datei im Klartext gespeichert).
+
+**Config-Pfade:** Pfade werden bereinigt und müssen **unterhalb des Verzeichnisses
+der ausführbaren Datei oder unterhalb des aktuellen Arbeitsverzeichnisses** liegen
+(das Aufrufsystem setzt dieses). Relative Pfade werden gegen das **aktuelle
+Arbeitsverzeichnis** aufgelöst (wie Go `filepath.Abs`). Den `debugOutput`-Parameter nur bei Fehleranalyse
+nutzen, wenn die ausgegebenen Angaben (Hardware-ID, Schlüsselmaterial, Pfade)
+nötig sind; im Normalbetrieb ausgeschaltet lassen.
 
 ### Versionierung
 
@@ -164,7 +171,7 @@ require_once 'vendor/autoload.php';
 
 use Sconfig\EnvLoader;
 
-// .env-Datei laden
+// .env-Datei laden (Pfad unterhalb des Einstiegsskripts; siehe Abschnitt .env-Pfade)
 EnvLoader::load('.env');
 
 // Werte über die env() Helper-Funktion abrufen
@@ -212,13 +219,18 @@ DB_SECURE_PASSWORD=<verschlüsselte_base64_zeichenkette>
 Die verschlüsselten Passwörter sind rechnergebunden (abgeleitet von Hardware-
 Identifikatoren), wodurch sie auf anderen Systemen unbrauchbar sind.
 
-#### Laden von benutzerdefiniertem Pfad
+#### `.env`-Pfade
+
+Pfade werden bereinigt und müssen **unterhalb des PHP-Einstiegsskripts, unterhalb
+des aktuellen Arbeitsverzeichnisses** oder unter der mit
+`EnvLoader::setExecutableRoot()` gesetzten Basis aufgelöst werden. Relative Pfade
+beziehen sich auf das **aktuelle Arbeitsverzeichnis**.
 
 ```php
 use Sconfig\EnvLoader;
 
-// Von einem benutzerdefinierten Pfad laden
-EnvLoader::load('/pfad/zur/deiner/.env');
+EnvLoader::setExecutableRoot(__DIR__); // optional, falls die Standardbasis nicht passt
+EnvLoader::load('config/.env');
 ```
 
 #### Überschreiben bestehender Variablen
@@ -456,9 +468,9 @@ oder Reihenfolge ändert den Schlüssel:
    Zeile(n) sind die Ursache.
 
 4. **Hardware-ID-Track**: Bei aktiviertem Debug wird jede Hardware-ID-Berechnung
-   und jeder Entschlüsselungsfehler als Zeile in `sconfig.debug.json` im
+   und jeder Entschlüsselungsfehler als Zeile in `sconfig.debug.txt` im
    Verzeichnis des Executables geschrieben. Format:
-   `Datum<TAB>Uhrzeit<TAB>Hardware-ID<TAB>Identifikatoren`. So entsteht eine
+   `YYYY-MM-DD HH:MM:SS<TAB>Hardware-ID (hex)<TAB>Identifikatoren`. So entsteht eine
    Chronik der IDs (z. B. nach einem fehlgeschlagenen Entschlüsseln).
 
 ## Sicherheitshinweise

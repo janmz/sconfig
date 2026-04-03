@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.1.46] - 2026-04-03
+
+### Changed
+
+- **Config- und .env-Pfade (Go/PHP):** Zusätzlich zum Verzeichnis der ausführbaren
+  Datei ist das **aktuelle Arbeitsverzeichnis** als gültige Pfadwurzel erlaubt;
+  relative Pfade werden gegen das CWD aufgelöst (`filepath.Abs` / PHP: Auflösung
+  wie bisher relativ zu `getcwd()`). Damit lassen sich Konfigurationsdateien
+  außerhalb des Binary-Verzeichnisses nutzen, wenn der Aufrufer das CWD setzt.
+
+---
+
+## [2.0.1.45] - 2026-04-02
+
+### Fixed
+
+- **Go:** Kommentare zu `writeDebugLog` und Debug-Tracking: Dateiname überall
+  `sconfig.debug.txt` (entspricht `debugLogFilename`); Zeilenformat und Hinweis
+  auf nicht existentes `debugLogMu` bereinigt.
+
+---
+
+## [2.0.1.44] - 2026-04-02
+
+### Added
+
+- **Dokumentation (Go/PHP):** Klarstellung im Code, dass die Kernfunktion von sconfig
+  ein maschinengebundener, deterministischer Schlüssel ist (kein Zufallsschlüssel pro
+  Start), und dass der Debugmodus nur bei Fehleranalyse mit sensiblen Daten
+  eingesetzt werden soll.
+- **CI:** `govulncheck ./...` im Go-Build-Job.
+
+### Changed
+
+- **Config- und .env-Pfade (Go `LoadConfig`/`UpdateConfig`, PHP `EnvLoader::load`/
+  `updateEnv`):** Pfade werden bereinigt; Dateien müssen unterhalb des
+  Verzeichnisses der ausführbaren Datei liegen (relative Pfade beziehen sich darauf).
+  PHP: optional `EnvLoader::setExecutableRoot()` für die Anwendungsbasis; in PHPUnit
+  `setExecutableRootForTest()` wie bisher.
+
+---
+
 ## [1.2.16.41] - 2026-02-27
 
 ### Added

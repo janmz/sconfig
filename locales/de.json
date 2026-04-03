@@ -18,5 +18,7 @@
   "config.failed_build_json":"Die Config-Daten konnten nicht nach JSON gewandelt werden: %v",
   "config.failed_writing":"Fehler beim Schreiben der Config-Datei nach %s: %v",
   "config.load_first":"Zuerst muss eine Config geladen werden, bevor sie geschrieben werden kann",
-  "config.password_message":"Hier neues Passwort eintragen"
+  "config.password_message":"Hier neues Passwort eintragen",
+  "config.path_invalid": "Ungültiger Config-Pfad: %s",
+  "config.path_outside_executable": "Config-Pfad liegt weder unter dem Verzeichnis der ausführbaren Datei noch unter dem aktuellen Arbeitsverzeichnis: %s"
 }

@@ -11,6 +11,15 @@ import (
 	"testing"
 )
 
+// testExeRoot returns a temp directory and pins it as the executable root for
+// path resolution tests. Paths may also lie under the real process CWD.
+func testExeRoot(tb testing.TB) string {
+	root := tb.TempDir()
+	SetExecutableRootForTest(root)
+	tb.Cleanup(func() { SetExecutableRootForTest("") })
+	return root
+}
+
 // TestConfig represents a test configuration structure
 type TestConfig struct {
 	Version                int    `json:"version" default:"1"`
@@ -48,7 +57,7 @@ type UpdateConfigTestConfig struct {
 
 func TestLoadConfig_Basic(ts *testing.T) {
 	// Create a temporary directory for test files
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "test_config.json")
 
 	// Test 1: Load config with default values (file doesn't exist)
@@ -83,7 +92,7 @@ func TestLoadConfig_Basic(ts *testing.T) {
 }
 
 func TestLoadConfig_WithExistingFile(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "test_config.json")
 
 	// Create an existing config file
@@ -141,7 +150,7 @@ func TestLoadConfig_WithExistingFile(ts *testing.T) {
 }
 
 func TestLoadConfig_PasswordEncryption(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "test_config.json")
 
 	ts.Run("Password encryption", func(ts *testing.T) {
@@ -191,7 +200,7 @@ func TestLoadConfig_PasswordEncryption(ts *testing.T) {
 }
 
 func TestLoadConfig_CleanConfig(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "test_config.json")
 
 	ts.Run("Clean config with plaintext passwords", func(ts *testing.T) {
@@ -231,7 +240,7 @@ func TestLoadConfig_CleanConfig(ts *testing.T) {
 }
 
 func TestLoadConfig_NestedStructures(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "nested_config.json")
 
 	ts.Run("Nested configuration structures", func(ts *testing.T) {
@@ -276,7 +285,7 @@ func TestLoadConfig_NestedStructures(ts *testing.T) {
 }
 
 func TestLoadConfig_SliceStructures(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "slice_config.json")
 
 	ts.Run("Configuration with slices", func(ts *testing.T) {
@@ -315,7 +324,7 @@ func TestLoadConfig_SliceStructures(ts *testing.T) {
 }
 
 func TestLoadConfig_ErrorCases(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 
 	ts.Run("Invalid config type (not a pointer to struct)", func(ts *testing.T) {
 		config := TestConfig{} // Not a pointer
@@ -362,7 +371,7 @@ func TestLoadConfig_ErrorCases(ts *testing.T) {
 }
 
 func TestLoadConfig_VersionManagement(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "version_test.json")
 
 	ts.Run("Version update", func(ts *testing.T) {
@@ -401,7 +410,7 @@ func TestLoadConfig_VersionManagement(ts *testing.T) {
 }
 
 func TestLoadConfig_CustomHardwareID(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "custom_hw.json")
 
 	ts.Run("Custom hardware ID function", func(ts *testing.T) {
@@ -577,7 +586,7 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 }
 
 func TestLoadConfig_FilePermissions(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "permissions_test.json")
 
 	ts.Run("File permissions", func(ts *testing.T) {
@@ -608,7 +617,7 @@ func TestLoadConfig_FilePermissions(ts *testing.T) {
 }
 
 func TestUpdateConfig_ThemeAndEncryption(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "theme_config.json")
 	cfg := &UpdateConfigTestConfig{
 		Version: 1,
@@ -651,7 +660,7 @@ func TestUpdateConfig_ThemeAndEncryption(ts *testing.T) {
 }
 
 func TestUpdateConfig_CleanConfig(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "clean_config.json")
 	cfg := &UpdateConfigTestConfig{
 		Version: 1,
@@ -683,12 +692,15 @@ func TestUpdateConfig_CleanConfig(ts *testing.T) {
 
 func TestUpdateConfig_WithoutLoad(ts *testing.T) {
 	ResetForTest()
+	root := testExeRoot(ts)
+	dummy := filepath.Join(root, "dummy.json")
+	out := filepath.Join(root, "out.json")
 	defer func() {
 		// Re-init so other tests are not broken
-		_ = LoadConfig(&TestConfig{}, 1, filepath.Join(ts.TempDir(), "dummy.json"), false, false)
+		_ = LoadConfig(&TestConfig{}, 1, dummy, false, false)
 	}()
 	cfg := &UpdateConfigTestConfig{Version: 1, Theme: "dark"}
-	err := UpdateConfig(cfg, filepath.Join(ts.TempDir(), "out.json"))
+	err := UpdateConfig(cfg, out)
 	if err == nil {
 		ts.Fatal("UpdateConfig without prior LoadConfig should return an error")
 	}
@@ -698,7 +710,7 @@ func TestUpdateConfig_WithoutLoad(ts *testing.T) {
 }
 
 func TestUpdateConfig_DifferentPath(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	loadPath := filepath.Join(tempDir, "config.json")
 	writePath := filepath.Join(tempDir, "config.backup.json")
 	cfg := &UpdateConfigTestConfig{Version: 1, Theme: "dark"}
@@ -724,6 +736,34 @@ func TestUpdateConfig_DifferentPath(ts *testing.T) {
 	}
 }
 
+func TestLoadConfigPathRejectsOutsideExecutable(ts *testing.T) {
+	ResetForTest()
+	root := testExeRoot(ts)
+	outside := filepath.Join(filepath.Dir(root), "outside_config.json")
+	err := LoadConfig(&TestConfig{}, 1, outside, false, false)
+	if err == nil {
+		ts.Fatal("expected error for config path outside executable directory and CWD")
+	}
+}
+
+func TestLoadConfigPathAllowsRelativeToCWD(ts *testing.T) {
+	ResetForTest()
+	dir := ts.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		ts.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		ts.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+	// Executable is the test binary; only CWD (dir) makes this path valid.
+	err = LoadConfig(&TestConfig{}, 1, "sconfig_cwd_only.json", false, false)
+	if err != nil {
+		ts.Fatalf("LoadConfig with path only under CWD: %v", err)
+	}
+}
+
 func TestDebugHardwareID(ts *testing.T) {
 	// DebugHardwareID prints to stderr; we only verify it returns a valid ID
 	id, err := DebugHardwareID()
@@ -736,7 +776,7 @@ func TestDebugHardwareID(ts *testing.T) {
 }
 
 func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "default_hw.json")
 
 	ts.Run("Default hardware ID generation", func(ts *testing.T) {
@@ -855,7 +895,7 @@ func TestIdentifierOrder_DifferentKeys(ts *testing.T) {
 	}
 	ts.Logf("Variant: identifier order — combined A|B → hwID %d, B|A → hwID %d", hwAB, hwBA)
 
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	pathAB := filepath.Join(tempDir, "order_ab.json")
 
 	// Encrypt with order A|B
@@ -902,7 +942,7 @@ func TestIdentifierOrder_DifferentKeys(ts *testing.T) {
 func TestRoundtrip_EncryptDecrypt(ts *testing.T) {
 	const plain = "roundtrip-test-value"
 	hwID := hardwareIDFromCombined("single-identifier")
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "roundtrip.json")
 
 	getHW := func() (uint64, error) { return hwID, nil }
@@ -932,7 +972,7 @@ func TestRoundtrip_EncryptDecrypt(ts *testing.T) {
 // (nonce + tag), for debugging production decryption failures.
 func TestCiphertextIntegrity(ts *testing.T) {
 	hwID := hardwareIDFromCombined("integrity-test")
-	tempDir := ts.TempDir()
+	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "integrity.json")
 
 	getHW := func() (uint64, error) { return hwID, nil }
@@ -981,7 +1021,7 @@ func contains(s, template string) bool {
 
 // Benchmark tests
 func BenchmarkLoadConfig_Simple(b *testing.B) {
-	tempDir := b.TempDir()
+	tempDir := testExeRoot(b)
 	configPath := filepath.Join(tempDir, "benchmark_config.json")
 
 	b.ResetTimer()
@@ -999,7 +1039,7 @@ func BenchmarkLoadConfig_Simple(b *testing.B) {
 }
 
 func BenchmarkLoadConfig_WithExistingFile(b *testing.B) {
-	tempDir := b.TempDir()
+	tempDir := testExeRoot(b)
 	configPath := filepath.Join(tempDir, "benchmark_existing.json")
 
 	// Create existing config file

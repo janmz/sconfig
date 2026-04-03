@@ -3,9 +3,18 @@ package sconfig
 /*
  * Description: This package contains a function for managing config files with secure passwords.
  *
- * Version: 2.0.1.43 (in version.go zu ändern)
+ * Kern der Bibliothek (Designziel):
+ * Der Verschlüsselungsschlüssel ist absichtlich nicht zufällig und nicht pro Aufruf neu.
+ * Auf demselben Rechner muss immer derselbe Schlüssel erzeugt werden, damit gespeicherte
+ * Config- bzw. .env-Daten weiter lesbar sind. Ziel ist kein „frisches“ Zufallsgeheimnis
+ * pro Start, sondern ein geheimnisbehafteter, aber deterministisch aus
+ * hardware-/systemgebundenen Daten abgeleiteter Schlüssel, den nur diese Maschine
+ * reproduzieren kann (ohne Zugriff auf die Hardware bzw. das System nicht erratbar).
+ *
+ * Version: 2.0.2.48 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  03.04.26	2.0.2	Fix: Fixed some security issues
  *  27.02.26	2.0.1	Fix: introduced the mandatory v2 path for verion 2
  *  27.02.26	2.0.0	Feature: Introduce UpdateConfig and updateEnv to update the files after changes
  *  27.02.26	1.2.16	Feature: UpdateConfig() to write config after changes (e.g. theme)
@@ -74,16 +83,88 @@ var PASSWORD_IS_SECURE_de string
 var encryptionKey []byte
 var initialized = false
 
-// Debug tracking: when debugOutput is true, hardware ID and identifiers are logged to sconfig.debug.json
+// Debug tracking: when debugOutput is true, hardware ID and identifiers are logged to sconfig.debug.txt
 var debugMode bool
 var lastDebugHardwareID uint64
 var lastDebugIdentifiers string
 
 const debugLogFilename = "sconfig.debug.txt"
 
+// executableRootForTest, if set, replaces the directory of os.Executable() when
+// resolving config paths (tests only).
+var executableRootForTest string
+
+// SetExecutableRootForTest pins the directory under which LoadConfig/UpdateConfig
+// paths must lie. Pass an empty string to clear. For tests only; production uses
+// the real executable directory.
+func SetExecutableRootForTest(dir string) {
+	executableRootForTest = dir
+}
+
+func getExecutableDirForConfigPaths() (string, error) {
+	if executableRootForTest != "" {
+		return filepath.Abs(executableRootForTest)
+	}
+	return getExecutableDir()
+}
+
+// pathUnderBase reports whether target is the same path as base or a path
+// inside base (no path traversal above base).
+func pathUnderBase(base, target string) (bool, error) {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return false, err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(baseAbs, targetAbs)
+	if err != nil {
+		// e.g. different volume letters on Windows — not under base
+		return false, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// resolveConfigPath cleans the path, resolves it to an absolute path, and ensures
+// it lies under the executable directory (or executableRootForTest in tests) or
+// under the process current working directory. Relative paths are resolved with
+// filepath.Abs (i.e. relative to the CWD), matching usual CLI expectations.
+func resolveConfigPath(path string) (string, error) {
+	clean := filepath.Clean(path)
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return "", fmt.Errorf("%s", t("config.path_invalid", err))
+	}
+	exeBase, err := getExecutableDirForConfigPaths()
+	if err != nil {
+		return "", fmt.Errorf("%s", t("config.path_invalid", err))
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("%s", t("config.path_invalid", err))
+	}
+	underExe, err := pathUnderBase(exeBase, abs)
+	if err != nil {
+		return "", fmt.Errorf("%s", t("config.path_invalid", err))
+	}
+	underCwd, err := pathUnderBase(cwd, abs)
+	if err != nil {
+		return "", fmt.Errorf("%s", t("config.path_invalid", err))
+	}
+	if !underExe && !underCwd {
+		return "", fmt.Errorf("%s", t("config.path_outside_executable", abs))
+	}
+	return abs, nil
+}
+
 /*
  * getExecutableDir returns the directory of the running executable.
- * Used to place sconfig.debug.json next to the binary.
+ * Used for path resolution and to place sconfig.debug.txt next to the binary.
  */
 func getExecutableDir() (string, error) {
 	path, err := os.Executable()
@@ -94,9 +175,9 @@ func getExecutableDir() (string, error) {
 }
 
 /*
- * writeDebugLog appends one line to sconfig.debug.json in the executable directory.
- * Line format: date<TAB>time<TAB>hardwareID<TAB>identifiers
- * Only used when debug mode is on; safe to call with debugLogMu held or from single goroutine.
+ * writeDebugLog appends one line to sconfig.debug.txt in the executable directory.
+ * Line format: YYYY-MM-DD HH:MM:SS<TAB>hardwareID (hex)<TAB>identifiers
+ * Only used when debug mode is on.
  */
 func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
 	dir, err := getExecutableDir()
@@ -856,6 +937,10 @@ func DebugHardwareID() (uint64, error) {
 // default values from struct tags, synchronizes an optional `Version` field,
 // and manages password encryption/decryption.
 //
+// Config-Pfad: `path` wird bereinigt und muss unterhalb des Verzeichnisses der
+// ausführbaren Datei oder unterhalb des aktuellen Arbeitsverzeichnisses liegen.
+// Relative Pfade werden wie üblich gegen das CWD aufgelöst (filepath.Abs).
+//
 // Behavior:
 //   - If the file does not exist, an empty configuration is assumed.
 //   - Fields named `<Name>Password` and `<Name>SecurePassword` are treated as a
@@ -867,15 +952,21 @@ func DebugHardwareID() (uint64, error) {
 //     migration or inspection purposes.
 //   - On successful completion and when `cleanConfig` is false, passwords are
 //     decrypted in memory so callers can use the plaintext values directly.
-//   - When `debugOutput` is true, all intermediate results and the final encryption
-//     key are printed to stderr for debugging purposes.
+//   - `debugOutput` schaltet ausführliche Diagnoseausgaben (Hardware-ID, Schlüssel,
+//     Dateipfade) auf stderr frei. Das ist nur sinnvoll, wenn ein Fehler aufgetreten
+//     ist und Kenntnis der verwendeten Daten zur Analyse unabdingbar ist; im
+//     Normalbetrieb ausgeschaltet lassen (sensible Daten).
 //
 // The optional `getHardwareID_func` allows overriding the hardware-ID based key
 // derivation used for encryption, which is primarily intended for testing.
 func LoadConfig(config interface{}, version int, path string, cleanConfig bool, debugOutput bool, getHardwareID_func ...func() (uint64, error)) error {
 
+	path, err := resolveConfigPath(path)
+	if err != nil {
+		return err
+	}
+
 	var file []byte
-	var err error
 
 	// Create wrapper function for hardware ID retrieval with debug support
 	var hardwareIDFunc func() (uint64, error)
@@ -963,9 +1054,15 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 // fields are encrypted in the file unless cleanConfig is true (then plaintext).
 // LoadConfig must have been called at least once before; otherwise UpdateConfig
 // returns an error. The path may differ from the one used in LoadConfig (e.g.
-// write to a backup file). Example: after the user changes the theme from "dark"
+// write to a backup file) but must likewise lie under the executable directory
+// or the current working directory.
+// Example: after the user changes the theme from "dark"
 // to "light" in the UI, set cfg.Theme = "light" and call UpdateConfig(cfg, "config.json").
 func UpdateConfig(config interface{}, path string, cleanConfig ...bool) error {
+	path, err := resolveConfigPath(path)
+	if err != nil {
+		return err
+	}
 	cleanConfigVal := false
 	if len(cleanConfig) > 0 {
 		cleanConfigVal = cleanConfig[0]
@@ -1039,12 +1136,11 @@ func getStructVersion(v reflect.Value) int {
 /*
  * Password key initialization
  *
- * This involves initializing from the computer's hardware properties.
- * This makes the file unusable on another computer - this is an
- * additional security feature.
- *
- * For transferring files of the first version of this application, an old,
- * insecure key generation procedure can also be used.
+ * Kernfunktion: Auf demselben System muss immer derselbe Schlüssel erzeugt werden
+ * (deterministisch aus der Hardware-/System-ID). Es geht nicht darum, ein
+ * kryptographisch zufälliges Einmalgeheimnis zu erzeugen, sondern um einen
+ * Schlüssel, der nur auf der betroffenen Maschine reproduzierbar ist und
+ * fremde Systeme von der Entschlüsselung ausschließt.
  *
  * Key bytes are derived with a Go-1.23-compatible RNG (see key_rand_go123.go)
  * so that the same hardware ID yields the same key on all Go versions and

@@ -19,17 +19,16 @@ should treat this as an accepted design choice (see securityreport.md).
 ## Security audits
 
 When a security audit is performed (e.g. by the security-auditor subagent or
-manually), follow the **required** steps in
-[docs/security-audit-checklist.md](docs/security-audit-checklist.md). In
-particular:
+manually), include at least the following in the audit report where applicable:
 
 - **Composer (PHP):** If the project contains any `composer.json`, run
   `composer install` and then `composer audit` in each such directory and
-  include the results in the audit report. Do not omit this step when
-  Composer is used.
+  include the results. Do not omit this step when Composer is used.
+- **Go:** Run `go vet ./...`, `go test ./...`, and `govulncheck ./...`; record
+  the outcomes.
 
-Other audit steps (e.g. Go `govulncheck`, dependency review) apply as defined
-in the checklist and audit process.
+Document further steps (e.g. dependency review, threat model updates) in
+`securityreport.md` as needed for the release.
 
 ## Reporting a Vulnerability
 

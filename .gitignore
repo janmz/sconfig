@@ -11,6 +11,7 @@
 **/.env.*
 go.sum
 i18n_test.go
+/vendor/
 
 # Ensure PHP source files are tracked (explicitly include)
 !php/src/*.php

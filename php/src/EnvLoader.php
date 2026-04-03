@@ -5,6 +5,11 @@ namespace Sconfig;
 /**
  * Decription: Loads and manages environment variables from .env files with secure password handling
  *
+ * Kernfunktion (wie bei der Go-Variante): Der Schlüssel ist absichtlich nicht zufällig pro
+ * Aufruf, sondern auf derselben Maschine immer derselbe, damit .env-Daten lesbar bleiben.
+ * Ziel ist ein nur-lokal reproduzierbares Geheimnis, nicht ein frisches Zufallsgeheimnis
+ * bei jedem Start.
+ *
  * This class provides functionality to load environment variables from a .env file,
  * automatically encrypt passwords, and make them accessible via the env() helper function.
  *
@@ -22,10 +27,16 @@ namespace Sconfig;
  * Changelog:
  * 1.2.0 27.02.26 set(), updateEnv(): persist changes (e.g. theme); require load() first; may write to different path
  * 1.1.0 24.11.25 Initial build of the PHP variant of the sconfig library
- * 
+ *
+ *
  */
 class EnvLoader
 {
+    /**
+     * Optional override for the directory under which .env paths must lie
+     * (tests and applications that set an explicit base).
+     */
+    private static ?string $executableRootOverride = null;
     /**
      * Get the password marker string for the current language
      *
@@ -87,9 +98,116 @@ class EnvLoader
     private static bool $encryptionInitialized = false;
 
     /**
+     * Set the directory that contains the application entry script (or the
+     * executable directory). Paths passed to load() / updateEnv() must resolve
+     * under this directory or under the current working directory. Call from
+     * application bootstrap if the default (directory of SCRIPT_FILENAME) is
+     * not appropriate.
+     */
+    public static function setExecutableRoot(string $directory): void
+    {
+        self::$executableRootOverride = $directory;
+    }
+
+    /**
+     * @internal For tests only (PHPUnit: point at the temp directory).
+     */
+    public static function setExecutableRootForTest(?string $directory): void
+    {
+        self::$executableRootOverride = $directory;
+    }
+
+    /**
+     * @return string Absolute base directory for .env path resolution
+     */
+    private static function getExecutableDirectoryForEnvPaths(): string
+    {
+        if (self::$executableRootOverride !== null) {
+            return self::$executableRootOverride;
+        }
+        if (isset($_SERVER['SCRIPT_FILENAME']) && is_string($_SERVER['SCRIPT_FILENAME']) && $_SERVER['SCRIPT_FILENAME'] !== '') {
+            $dir = dirname($_SERVER['SCRIPT_FILENAME']);
+            $real = realpath($dir);
+
+            return $real !== false ? $real : $dir;
+        }
+        $cwd = getcwd();
+
+        return $cwd !== false ? $cwd : '.';
+    }
+
+    private static function isAbsolutePath(string $path): bool
+    {
+        if ($path === '') {
+            return false;
+        }
+        if (PHP_OS_FAMILY === 'Windows') {
+            return preg_match('/^[A-Za-z]:[\\\\\\/]|^\\\\\\\\/', $path) === 1;
+        }
+
+        return $path[0] === '/' || $path[0] === '\\';
+    }
+
+    /**
+     * Clean path and ensure it lies under the script/executable base or the
+     * current working directory (getcwd()).
+     *
+     * @throws \RuntimeException If the path is invalid or escapes both bases
+     */
+    private static function resolveEnvFilePath(string $filePath): string
+    {
+        I18n::initialize();
+        $sep = DIRECTORY_SEPARATOR;
+        $clean = str_replace(['\\', '/'], $sep, $filePath);
+        // Resolve like Go filepath.Abs: relative paths are relative to CWD.
+        if (!self::isAbsolutePath($filePath)) {
+            $cwd = getcwd();
+            if ($cwd === false) {
+                throw new \RuntimeException(I18n::t('config.path_invalid', $filePath));
+            }
+            $abs = $cwd . $sep . ltrim($clean, $sep);
+        } else {
+            $abs = $clean;
+        }
+        $rp = realpath($abs);
+        if ($rp !== false) {
+            $final = $rp;
+        } else {
+            $dir = dirname($abs);
+            $dirReal = realpath($dir);
+            if ($dirReal === false) {
+                throw new \RuntimeException(I18n::t('config.path_invalid', $filePath));
+            }
+            $final = $dirReal . $sep . basename($abs);
+        }
+
+        $bases = [];
+        $scriptBase = self::getExecutableDirectoryForEnvPaths();
+        $scriptReal = realpath($scriptBase);
+        if ($scriptReal !== false) {
+            $bases[] = $scriptReal;
+        }
+        $cwdReal = realpath(getcwd() ?: '.');
+        if ($cwdReal !== false) {
+            $bases[] = $cwdReal;
+        }
+        $bases = array_values(array_unique($bases));
+
+        $finalNorm = str_replace('\\', '/', $final);
+        foreach ($bases as $baseReal) {
+            $basePrefix = rtrim(str_replace('\\', '/', $baseReal), '/');
+            if ($finalNorm === $basePrefix || str_starts_with($finalNorm, $basePrefix . '/')) {
+                return $final;
+            }
+        }
+
+        throw new \RuntimeException(I18n::t('config.path_outside_executable', $final));
+    }
+
+    /**
      * Load environment variables from a .env file with password encryption support
      *
-     * @param string $filePath Path to the .env file
+     * @param string $filePath Path to the .env file (must lie under the script/executable directory or CWD)
      * @param bool $override Whether to override existing environment variables
      * @param bool $cleanConfig If true, decrypts passwords before writing (use with care)
      * @return void
@@ -102,6 +220,7 @@ class EnvLoader
         
         self::initializeEncryption();
 
+        $filePath = self::resolveEnvFilePath($filePath);
         self::$filePath = $filePath;
         $changed = false;
 
@@ -737,6 +856,7 @@ class EnvLoader
         if (!self::$loaded || !self::$encryptionInitialized) {
             throw new \RuntimeException(I18n::t('config.load_first'));
         }
+        $filePath = self::resolveEnvFilePath($filePath);
         $lines = [];
         $parsed = [];
         if (file_exists($filePath) && is_readable($filePath)) {

@@ -20,6 +20,7 @@ class EnvLoaderTest extends TestCase
         EnvLoader::clear();
         $this->tempDir = sys_get_temp_dir() . '/sconfig_php_test_' . uniqid('', true);
         mkdir($this->tempDir, 0700, true);
+        EnvLoader::setExecutableRootForTest($this->tempDir);
     }
 
     protected function tearDown(): void
@@ -38,6 +39,7 @@ class EnvLoaderTest extends TestCase
             }
             rmdir($this->tempDir);
         }
+        EnvLoader::setExecutableRootForTest(null);
         EnvLoader::clear();
         parent::tearDown();
     }
@@ -284,5 +286,12 @@ class EnvLoaderTest extends TestCase
         EnvLoader::updateEnv($path, true);
         $content = file_get_contents($path);
         self::assertStringContainsString('secret', $content);
+    }
+
+    public function testLoadRejectsPathOutsideExecutableRoot(): void
+    {
+        $outside = dirname($this->tempDir) . DIRECTORY_SEPARATOR . 'outside_' . uniqid('', true) . '.env';
+        $this->expectException(\RuntimeException::class);
+        EnvLoader::load($outside);
     }
 }

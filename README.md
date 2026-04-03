@@ -92,7 +92,7 @@ type AppConfig struct {
 
 func main() {
     cfg := &AppConfig{}
-    if err := sconfig.LoadConfig(cfg, 1, "config.json", false); err != nil {
+    if err := sconfig.LoadConfig(cfg, 1, "config.json", false, false); err != nil {
         panic(err)
     }
     fmt.Println("listening on", cfg.Port)
@@ -103,6 +103,13 @@ func main() {
   encrypted `DBSecurePassword` and a marker in `DBPassword`.
 - In memory, `DBPassword` is automatically decrypted for use (unless
   `cleanConfig` is set to `true`).
+
+**Config paths:** Paths are cleaned and must lie **under the directory of the
+running executable or under the process current working directory** (the
+caller controls the latter). Relative paths are resolved against the **current
+working directory** (same as Go `filepath.Abs`). Use `debugOutput` only when diagnosing
+failures and you need the printed values (hardware ID, key material, paths); keep
+it off in normal operation.
 
 ### Versioning
 
@@ -161,7 +168,7 @@ require_once 'vendor/autoload.php';
 
 use Sconfig\EnvLoader;
 
-// Load .env file
+// Load .env file (path must be under the entry script directory; see note below)
 EnvLoader::load('.env');
 
 // Access values using the env() helper function
@@ -207,13 +214,18 @@ DB_SECURE_PASSWORD=<encrypted_base64_string>
 The encrypted passwords are machine-bound (derived from hardware identifiers),
 making them unusable on other systems.
 
-#### Loading from Custom Path
+#### `.env` paths
+
+Paths are cleaned and must resolve **under the directory of the PHP entry script,
+under the current working directory,** or under the directory passed to
+`EnvLoader::setExecutableRoot()` at bootstrap. Relative paths are resolved
+against the **current working directory**.
 
 ```php
 use Sconfig\EnvLoader;
 
-// Load from a custom path
-EnvLoader::load('/path/to/your/.env');
+EnvLoader::setExecutableRoot(__DIR__); // optional, if the default base is wrong
+EnvLoader::load('config/.env');
 ```
 
 #### Override Existing Variables
@@ -445,9 +457,9 @@ these changes the key:
    hashing; the differing line(s) are the cause.
 
 4. **Hardware-ID track**: When debug is on, each hardware-ID computation and
-   each decryption failure appends a line to `sconfig.debug.json` in the
+   each decryption failure appends a line to `sconfig.debug.txt` in the
    executable’s directory. Format:
-   `date<TAB>time<TAB>hardwareID<TAB>identifiers`.
+   `YYYY-MM-DD HH:MM:SS<TAB>hardwareID (hex)<TAB>identifiers`.
    Use this to see a timeline of IDs (e.g. after a failed decrypt).
 
 ## Security Notes
