@@ -11,7 +11,7 @@ package sconfig
  * hardware-/systemgebundenen Daten abgeleiteter Schlüssel, den nur diese Maschine
  * reproduzieren kann (ohne Zugriff auf die Hardware bzw. das System nicht erratbar).
  *
- * Version: 2.0.2.48 (in version.go zu ändern)
+ * Version: 2.0.2.49 (in version.go zu ändern)
  *
  * ChangeLog:
  *  03.04.26	2.0.2	Fix: Fixed some security issues
@@ -89,6 +89,10 @@ var lastDebugHardwareID uint64
 var lastDebugIdentifiers string
 
 const debugLogFilename = "sconfig.debug.txt"
+
+// maxEncryptedPasswordB64Len limits base64 ciphertext size to avoid excessive
+// memory use from malformed or hostile config values.
+const maxEncryptedPasswordB64Len = 4096
 
 // executableRootForTest, if set, replaces the directory of os.Executable() when
 // resolving config paths (tests only).
@@ -1221,6 +1225,9 @@ func updateDefaultValues(v reflect.Value) error {
 		} else {
 			defaultValue, found := field.Tag.Lookup("default")
 			if found {
+				if !fieldValue.CanSet() {
+					return fmt.Errorf("%s", t("config.field_not_settable", field.Name))
+				}
 				switch fieldValue.Kind() {
 				case reflect.String:
 					fieldValue.SetString(defaultValue)
@@ -1284,9 +1291,8 @@ func updateVersionAndPasswords(v reflect.Value, version int, changed *bool) erro
 		} else {
 			// Version check
 			if field.Name == "Version" {
-				if fieldValue.Int() != int64(version) {
-					fieldValue.SetInt(int64(version))
-					*changed = true
+				if err := syncVersionField(fieldValue, version, changed); err != nil {
+					return err
 				}
 			}
 			// Password handling
@@ -1295,16 +1301,22 @@ func updateVersionAndPasswords(v reflect.Value, version int, changed *bool) erro
 				for j := 0; j < t.NumField(); j++ {
 					if t.Field(j).Name == pw_prefix+"Password" {
 						field2Value := v.Field(j)
-						if field2Value.String() != PASSWORD_IS_SECURE_de && field2Value.String() != PASSWORD_IS_SECURE_en {
+						passwordVal := field2Value.String()
+						secureVal := fieldValue.String()
+						if isPasswordMarker(passwordVal) {
+							if secureVal == "" {
+								return passwordPairError(pw_prefix, "config.secure_password_missing")
+							}
+							break
+						}
+						if passwordVal != "" {
 							// New password found in plain text
-							// New Secure_Password is calculated
-							password, err := encrypt(field2Value.String())
+							password, err := encrypt(passwordVal)
 							if err != nil {
 								return err
 							}
 							fieldValue.SetString(password)
 							field2Value.SetString(PASSWORD_IS_SECURE)
-							//fmt.Printf(" new value %s\n", password)
 							*changed = true
 						}
 						break
@@ -1352,17 +1364,29 @@ func decodePasswords(v reflect.Value) error {
 				for j := 0; j < type_info.NumField(); j++ {
 					if type_info.Field(j).Name == pw_prefix+"Password" {
 						field2Value := v.Field(j)
-						password, err := decrypt(fieldValue.String())
+						secureVal := fieldValue.String()
+						passwordVal := field2Value.String()
+						if secureVal == "" {
+							if isPasswordMarker(passwordVal) {
+								return passwordPairError(pw_prefix, "config.secure_password_missing")
+							}
+							break
+						}
+						if err := validateEncryptedPasswordB64(secureVal); err != nil {
+							if debugMode {
+								writeDebugLog(lastDebugHardwareID, lastDebugIdentifiers, false)
+							}
+							return passwordPairError(pw_prefix, "config.encrypted_password_invalid", err)
+						}
+						password, err := decrypt(secureVal)
 						if err != nil {
 							if debugMode {
 								writeDebugLog(lastDebugHardwareID, lastDebugIdentifiers, false)
 							}
-							// Always show a field name (use translated fallback if prefix empty)
-							fieldName := pw_prefix
-							if fieldName == "" {
-								fieldName = t("config.unknown_password_field")
-							}
-							return fmt.Errorf("%s", t("config.decrypt_failed", fieldName, err))
+							return passwordPairError(pw_prefix, "config.decrypt_failed", err)
+						}
+						if !field2Value.CanSet() {
+							return fmt.Errorf("%s", t("config.field_not_settable", pw_prefix+"Password"))
 						}
 						field2Value.SetString(password)
 						break
@@ -1370,6 +1394,72 @@ func decodePasswords(v reflect.Value) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func isPasswordMarker(value string) bool {
+	if value == "" {
+		return false
+	}
+	return value == PASSWORD_IS_SECURE ||
+		value == PASSWORD_IS_SECURE_de ||
+		value == PASSWORD_IS_SECURE_en
+}
+
+func passwordFieldLabel(prefix string) string {
+	if prefix == "" {
+		return t("config.unknown_password_field")
+	}
+	return prefix
+}
+
+func passwordPairError(prefix, messageKey string, detail ...interface{}) error {
+	fieldName := passwordFieldLabel(prefix)
+	if len(detail) == 0 {
+		return fmt.Errorf("%s", t(messageKey, fieldName))
+	}
+	return fmt.Errorf("%s", t(messageKey, fieldName, detail[0]))
+}
+
+func syncVersionField(fieldValue reflect.Value, version int, changed *bool) error {
+	if !fieldValue.CanSet() {
+		return fmt.Errorf("%s", t("config.field_not_settable", "Version"))
+	}
+	switch fieldValue.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if fieldValue.Int() != int64(version) {
+			fieldValue.SetInt(int64(version))
+			*changed = true
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if fieldValue.Uint() != uint64(version) {
+			fieldValue.SetUint(uint64(version))
+			*changed = true
+		}
+	default:
+		return fmt.Errorf("%s", t("config.version_type_unsupported", fieldValue.Kind()))
+	}
+	return nil
+}
+
+// validateEncryptedPasswordB64 checks whether a value can plausibly be an
+// AES-GCM ciphertext produced by encrypt() before decryption is attempted.
+func validateEncryptedPasswordB64(text string) error {
+	if text == "" {
+		return fmt.Errorf("empty encrypted password")
+	}
+	if len(text) > maxEncryptedPasswordB64Len {
+		return fmt.Errorf("encrypted password too long (%d characters, max %d)", len(text), maxEncryptedPasswordB64Len)
+	}
+	data, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return fmt.Errorf("invalid base64: %w", err)
+	}
+	const gcmTagSize = 16
+	minLen := 12 + gcmTagSize
+	if len(data) < minLen {
+		return fmt.Errorf("ciphertext too short (need at least %d bytes, got %d)", minLen, len(data))
 	}
 	return nil
 }
@@ -1390,6 +1480,9 @@ func encrypt(text string) (string, error) {
 }
 
 func decrypt(text string) (string, error) {
+	if err := validateEncryptedPasswordB64(text); err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
 	block, err := aes.NewCipher(encryptionKey)
 	if err != nil {
 		return "", fmt.Errorf("decrypt: cipher init: %w", err)
@@ -1408,5 +1501,8 @@ func decrypt(text string) (string, error) {
 	}
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	return string(plaintext), err
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(plaintext), nil
 }

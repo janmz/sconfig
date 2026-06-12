@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.2.49] - 2026-06-12
+
+### Fixed
+
+- **Go:** Passwort-Paare werden vor der Entschlüsselung geprüft: Markierungstext
+  im `Password`-Feld ohne Wert im `SecurePassword`-Feld liefert eine klare
+  Fehlermeldung statt eines technischen Decrypt-Fehlers; ungültiges Base64,
+  zu kurze oder zu lange Ciphertext-Werte werden abgefangen.
+- **Go:** Beim Einlesen der Config keine Panics mehr bei nicht-setzbaren Feldern,
+  nicht-numerischen `Version`-Typen oder fehlerhaften verschlüsselten Werten.
+
+---
+
 ## [2.0.1.46] - 2026-04-03
 
 ### Changed

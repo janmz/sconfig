@@ -194,6 +194,17 @@ class EnvLoaderTest extends TestCase
         self::assertSame('my-api-key', EnvLoader::get('API_PASSWORD'));
     }
 
+    public function testMarkerWithoutSecurePasswordThrowsClearError(): void
+    {
+        $path = $this->envPath();
+        $marker = I18n::t('config.password_message');
+        file_put_contents($path, "DATABASE_PASSWORD={$marker}\nDATABASE_SECURE_PASSWORD=\n");
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/secure password field is empty|Secure-Password-Feld ist leer/i');
+        EnvLoader::load($path);
+    }
+
     public function testCleanConfigLeavesPlaintextInFile(): void
     {
         $path = $this->envPath();

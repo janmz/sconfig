@@ -73,6 +73,43 @@ class EnvLoader
     }
 
     /**
+     * @param array<string, string> $markers
+     */
+    private static function isPasswordMarker(string $value, array $markers): bool
+    {
+        if ($value === '') {
+            return false;
+        }
+
+        return $value === self::getPasswordMarker()
+            || $value === $markers['en']
+            || $value === $markers['de'];
+    }
+
+    private static function validateEncryptedPasswordB64(string $text): void
+    {
+        if ($text === '') {
+            throw new \RuntimeException('empty encrypted password');
+        }
+
+        if (strlen($text) > 4096) {
+            throw new \RuntimeException('encrypted password too long');
+        }
+
+        $data = base64_decode($text, true);
+        if ($data === false) {
+            throw new \RuntimeException('invalid base64');
+        }
+
+        $ivLength = openssl_cipher_iv_length('aes-256-gcm');
+        $tagLength = 16;
+        $minLen = $ivLength + $tagLength;
+        if (strlen($data) < $minLen) {
+            throw new \RuntimeException('ciphertext too short');
+        }
+    }
+
+    /**
      * @var array<string, string> Cache of loaded environment variables
      */
     private static array $cache = [];
@@ -329,10 +366,19 @@ class EnvLoader
                 $prefix = $matches[1];
                 $securePasswordKey = $prefix . '_SECURE_PASSWORD';
 
+                $secureValue = $parsed[$securePasswordKey] ?? '';
+
+                if (self::isPasswordMarker($value, $markers)) {
+                    if ($secureValue === '') {
+                        throw new \RuntimeException(
+                            I18n::t('config.secure_password_missing', $prefix)
+                        );
+                    }
+                    continue;
+                }
+
                 // Check if password is plaintext (not the marker)
-                if ($value !== $markers['en'] && 
-                    $value !== $markers['de'] &&
-                    $value !== '') {
+                if ($value !== '') {
                     // Encrypt the password
                     $encrypted = self::encrypt($value);
                     
@@ -361,24 +407,41 @@ class EnvLoader
      */
     private static function decryptPasswords(array &$parsed): void
     {
+        $markers = self::getPasswordMarkers();
+
         foreach ($parsed as $key => $value) {
             // Check if this is a SecurePassword field
             if (preg_match('/^(.+)_SECURE_PASSWORD$/i', $key, $matches)) {
                 $prefix = $matches[1];
                 $passwordKey = $prefix . '_PASSWORD';
+                $passwordValue = $parsed[$passwordKey] ?? '';
 
-                // Decrypt and set in Password field
-                if (!empty($value)) {
-                    try {
-                        $decrypted = self::decrypt($value);
-                        $parsed[$passwordKey] = $decrypted;
-                    } catch (\Exception $e) {
-                        // If decryption fails, keep the secure password value
-                        // This might happen if the file was moved to a different machine
-                        I18n::initialize();
-                        $prefix = preg_replace('/_SECURE_PASSWORD$/i', '', $key);
-                        throw new \RuntimeException(I18n::t('config.decrypt_failed', $prefix) . ': ' . $e->getMessage());
+                if ($value === '') {
+                    if (self::isPasswordMarker($passwordValue, $markers)) {
+                        throw new \RuntimeException(
+                            I18n::t('config.secure_password_missing', $prefix)
+                        );
                     }
+                    continue;
+                }
+
+                try {
+                    self::validateEncryptedPasswordB64($value);
+                } catch (\RuntimeException $e) {
+                    I18n::initialize();
+                    throw new \RuntimeException(
+                        I18n::t('config.encrypted_password_invalid', $prefix, $e->getMessage())
+                    );
+                }
+
+                try {
+                    $decrypted = self::decrypt($value);
+                    $parsed[$passwordKey] = $decrypted;
+                } catch (\Exception $e) {
+                    I18n::initialize();
+                    throw new \RuntimeException(
+                        I18n::t('config.decrypt_failed', $prefix) . ': ' . $e->getMessage()
+                    );
                 }
             }
         }
@@ -755,6 +818,8 @@ class EnvLoader
             throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
         }
 
+        self::validateEncryptedPasswordB64($encryptedText);
+
         $data = base64_decode($encryptedText, true);
         if ($data === false) {
             throw new \RuntimeException(I18n::t('config.failed_parsing', 'base64 data'));
@@ -763,10 +828,6 @@ class EnvLoader
         $method = 'aes-256-gcm';
         $ivLength = openssl_cipher_iv_length($method);
         $tagLength = 16; // GCM tag is always 16 bytes
-
-        if (strlen($data) < $ivLength + $tagLength) {
-            throw new \RuntimeException(I18n::t('config.failed_parsing', 'encrypted data'));
-        }
 
         $iv = substr($data, 0, $ivLength);
         $tag = substr($data, $ivLength, $tagLength);

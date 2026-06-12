@@ -1003,6 +1003,71 @@ func TestCiphertextIntegrity(ts *testing.T) {
 	ts.Logf("Variant: ciphertext integrity — base64 len %d, decoded len %d (nonce+tag+cipher)", len(cipherB64), len(decoded))
 }
 
+func TestLoadConfig_MarkerWithoutSecurePassword(ts *testing.T) {
+	tempDir := testExeRoot(ts)
+	configPath := filepath.Join(tempDir, "config.json")
+	marker := t("config.password_message")
+	content := `{"version":1,"database_password":"` + marker + `","database_secure_password":""}`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		ts.Fatal(err)
+	}
+	cfg := &TestConfig{}
+	err := LoadConfig(cfg, 1, configPath, false, false)
+	if err == nil {
+		ts.Fatal("expected error when marker present but secure password empty")
+	}
+	if !contains(err.Error(), t("config.secure_password_missing", "Database")) {
+		ts.Errorf("expected secure_password_missing error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_InvalidEncryptedPassword(ts *testing.T) {
+	tempDir := testExeRoot(ts)
+	configPath := filepath.Join(tempDir, "config.json")
+	marker := t("config.password_message")
+	cases := []struct {
+		name   string
+		secure string
+	}{
+		{"invalid base64", "not-valid-base64!!!"},
+		{"too short", "YWJj"},
+	}
+	for _, tc := range cases {
+		ts.Run(tc.name, func(ts *testing.T) {
+			content := `{"version":1,"database_password":"` + marker + `","database_secure_password":"` + tc.secure + `"}`
+			if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+				ts.Fatal(err)
+			}
+			cfg := &TestConfig{}
+			err := LoadConfig(cfg, 1, configPath, false, false)
+			if err == nil {
+				ts.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_VersionStringTypeNoPanic(ts *testing.T) {
+	tempDir := testExeRoot(ts)
+	configPath := filepath.Join(tempDir, "config.json")
+	content := `{"version":"1","database_password":"secret"}`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		ts.Fatal(err)
+	}
+	type BadVersionConfig struct {
+		Version          string `json:"version"`
+		DatabasePassword string `json:"database_password"`
+	}
+	cfg := &BadVersionConfig{}
+	err := LoadConfig(cfg, 1, configPath, false, false)
+	if err == nil {
+		ts.Fatal("expected error for unsupported Version type")
+	}
+	if !contains(err.Error(), t("config.version_type_unsupported", "string")) {
+		ts.Errorf("expected version_type_unsupported error, got: %v", err)
+	}
+}
+
 // Helper function to check if a string contains a substring that matches to a template
 func contains(s, template string) bool {
 	if idx := strings.IndexAny(template, "%{"); idx != -1 {
