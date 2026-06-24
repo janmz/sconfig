@@ -6,6 +6,7 @@ namespace Sconfig\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Sconfig\EnvLoader;
+use Sconfig\I18n;
 
 /**
  * Tests for EnvLoader: load, get, has, clear, password encryption, cleanConfig.

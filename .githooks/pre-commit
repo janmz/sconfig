@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: run the same checks as .github/workflows/ci.yml
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -x "$ROOT/scripts/ci-local.sh" ]; then
+	exec "$ROOT/scripts/ci-local.sh"
+fi
+
+if [ -f "$ROOT/scripts/ci-local.sh" ]; then
+	exec bash "$ROOT/scripts/ci-local.sh"
+fi
+
+echo "error: scripts/ci-local.sh not found" >&2
+exit 1

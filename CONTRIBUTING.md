@@ -5,11 +5,42 @@ Thanks for your interest in contributing!
 ## Development
 
 - Go version: see `go.mod`.
+- PHP 8.2+ and Composer for PHP checks (see `php/INSTALL.md`).
 - Run tests locally:
 
 ```bash
 go test ./... -v
 ```
+
+### Local CI (same checks as GitHub Actions)
+
+```bash
+./scripts/ci-local.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+.\scripts\ci-local.ps1
+```
+
+### Pre-commit hook
+
+Install once after cloning:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+.\scripts\install-hooks.ps1
+```
+
+This sets `core.hooksPath` to `.githooks` and runs `scripts/ci-local.sh`
+before each commit (`go vet`, `govulncheck`, `go test`, `composer audit`,
+PHPUnit).
 
 ## Pull Requests
 

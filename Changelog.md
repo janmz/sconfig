@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.2.51] - 2026-06-24
+
+### Added
+
+- **Pre-commit:** Git-Hook unter `.githooks/pre-commit` und Skripte
+  `scripts/ci-local.sh` / `scripts/ci-local.ps1` führen vor jedem Commit
+  dieselben Prüfungen wie der CI-Workflow aus (`go vet`, `govulncheck`,
+  `go test`, `composer audit`, PHPUnit). Installation über
+  `scripts/install-hooks.sh` bzw. `scripts/install-hooks.ps1`.
+
+---
+
+## [2.0.2.50] - 2026-06-24
+
+### Fixed
+
+- **PHP/CI:** PHPUnit-Test `testMarkerWithoutSecurePasswordThrowsClearError`
+  importiert `Sconfig\I18n` korrekt (behebt CI-Job `composer-audit`).
+- **CI:** `php/composer.lock` wird versioniert; reproduzierbare
+  `composer install`-Läufe in GitHub Actions.
+
+### Changed
+
+- **CI:** GitHub Actions auf `checkout@v5`, `setup-go@v6`, `cache@v5`
+  aktualisiert; Node.js-24-Opt-in für Action-Laufzeit.
+
+---
+
 ## [2.0.2.49] - 2026-06-12
 
 ### Fixed
@@ -42,9 +70,9 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - **Dokumentation (Go/PHP):** Klarstellung im Code, dass die Kernfunktion von sconfig
-  ein maschinengebundener, deterministischer Schlüssel ist (kein Zufallsschlüssel pro
-  Start), und dass der Debugmodus nur bei Fehleranalyse mit sensiblen Daten
-  eingesetzt werden soll.
+  ein maschinengebundener, deterministischer Schlüssel ist (kein
+  Zufallsschlüssel pro Start), und dass der Debugmodus nur bei Fehleranalyse
+  mit sensiblen Daten eingesetzt werden soll.
 - **CI:** `govulncheck ./...` im Go-Build-Job.
 
 ### Changed
@@ -61,15 +89,18 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **UpdateConfig (Go):** Exportierte Funktion `UpdateConfig(config, path, cleanConfig...)` zum
-  Zurückschreiben der Config-Datei nach Änderungen (z. B. Theme in der UI). Secure-Felder
-  werden standardmäßig verschlüsselt; optional `cleanConfig=true` für Klartext in der Datei.
-  Voraussetzung: Mindestens einmal `LoadConfig` muss vorher aufgerufen worden sein. Die
-  Config kann unter einem anderen Pfad als dem Lade-Pfad geschrieben werden (z. B. Backup).
-- **updateEnv und set (PHP):** Öffentliche Methoden `EnvLoader::set($key, $value)` und
-  `EnvLoader::updateEnv($filePath, $cleanConfig = false)` zum Setzen von Werten und
-  Zurückschreiben der .env-Datei (z. B. nach Theme-Änderung). Voraussetzung: Zuerst `load()`
-  aufrufen; Schreiben unter anderem Pfad ist erlaubt.
+- **UpdateConfig (Go):** Exportierte Funktion
+  `UpdateConfig(config, path, cleanConfig...)` zum Zurückschreiben der
+  Config-Datei nach Änderungen (z. B. Theme in der UI). Secure-Felder werden
+  standardmäßig verschlüsselt; optional `cleanConfig=true` für Klartext in der Datei.
+  Voraussetzung: Mindestens einmal `LoadConfig` muss vorher aufgerufen worden
+  sein. Die   Config kann unter einem anderen Pfad als dem Lade-Pfad geschrieben
+  werden (z. B. Backup).
+- **updateEnv und set (PHP):** Öffentliche Methoden
+  `EnvLoader::set($key, $value)` und
+  `EnvLoader::updateEnv($filePath, $cleanConfig = false)` zum Setzen von Werten
+  und   Zurückschreiben der .env-Datei (z. B. nach Theme-Änderung).
+  Voraussetzung: Zuerst `load()` aufrufen; Schreiben unter anderem Pfad ist erlaubt.
 
 ---
 
