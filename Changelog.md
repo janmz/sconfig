@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.4.55] - 2026-06-24
+
+### Fixed
+
+- **CI:** Root-`composer audit` wird übersprungen, wenn `composer.lock` keine
+  Pakete enthält (ältere Composer-Versionen in Actions beenden sonst mit Exit
+  1 trotz `--locked`). Composer in Actions auf `composer:v2` gepinnt.
+
+---
+
 ## [2.0.3.53] - 2026-06-24
 
 ### Fixed

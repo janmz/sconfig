@@ -28,7 +28,12 @@ go test ./...
 if [ -f composer.json ] && [ -f composer.lock ]; then
 	echo "==> composer audit (root)"
 	require_command composer
-	composer audit --locked
+	package_count="$(php -r '$l=json_decode(file_get_contents("composer.lock"),true); echo count($l["packages"]??[])+count($l["packages-dev"]??[]);')"
+	if [ "$package_count" -eq 0 ]; then
+		echo "No Composer packages in root lock file; skipping audit."
+	else
+		composer audit --locked
+	fi
 fi
 
 if [ -f php/composer.json ]; then

@@ -11,9 +11,10 @@ package sconfig
  * hardware-/systemgebundenen Daten abgeleiteter Schlüssel, den nur diese Maschine
  * reproduzieren kann (ohne Zugriff auf die Hardware bzw. das System nicht erratbar).
  *
- * Version: 2.0.4.54 (in version.go zu ändern)
+ * Version: 2.0.5.56 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  24.06.26	2.0.5	Fix: second try to handle empty composer.lock
  *  24.06.26	2.0.4	Fix: use 1.25.x in workflow. an composer audit --locked
  *  24.06.26	2.0.3	Fix: include a pre commit hook to prevent ci-workflow failures, import I18N and other ci workflow updates
  *  03.04.26	2.0.2	Fix: Fixed some security issues

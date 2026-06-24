@@ -31,8 +31,14 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ((Test-Path "composer.json") -and (Test-Path "composer.lock")) {
     Write-Host "==> composer audit (root)"
     Require-Command composer
-    composer audit --locked
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $lock = Get-Content "composer.lock" -Raw | ConvertFrom-Json
+    $packageCount = @($lock.packages).Count + @($lock.'packages-dev').Count
+    if ([int]$packageCount -eq 0) {
+        Write-Host "No Composer packages in root lock file; skipping audit."
+    } else {
+        composer audit --locked
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
 }
 
 if (Test-Path "php/composer.json") {
