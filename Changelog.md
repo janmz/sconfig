@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.3.53] - 2026-06-24
+
+### Fixed
+
+- **CI:** Go-Version im Workflow auf `1.25.x` angehoben (entspricht `go.mod`).
+- **CI:** `composer audit --locked` für Root- und PHP-Lockfile; behebt Fehler
+  „No installed packages found“ beim leeren Root-`composer.lock`.
+
+---
+
 ## [2.0.2.51] - 2026-06-24
 
 ### Added

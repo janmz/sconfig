@@ -28,12 +28,10 @@ Write-Host "==> go test"
 go test ./...
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-if (Test-Path "composer.json") {
+if ((Test-Path "composer.json") -and (Test-Path "composer.lock")) {
     Write-Host "==> composer audit (root)"
     Require-Command composer
-    composer install --no-interaction --prefer-dist --no-progress
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    composer audit
+    composer audit --locked
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
@@ -45,7 +43,7 @@ if (Test-Path "php/composer.json") {
     try {
         composer install --no-interaction --prefer-dist --no-progress
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        composer audit
+        composer audit --locked
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     } finally {
         Pop-Location

@@ -25,11 +25,10 @@ govulncheck ./...
 echo "==> go test"
 go test ./...
 
-if [ -f composer.json ]; then
+if [ -f composer.json ] && [ -f composer.lock ]; then
 	echo "==> composer audit (root)"
 	require_command composer
-	composer install --no-interaction --prefer-dist --no-progress
-	composer audit
+	composer audit --locked
 fi
 
 if [ -f php/composer.json ]; then
@@ -39,7 +38,7 @@ if [ -f php/composer.json ]; then
 	(
 		cd php
 		composer install --no-interaction --prefer-dist --no-progress
-		composer audit
+		composer audit --locked
 	)
 
 	echo "==> phpunit (php/)"

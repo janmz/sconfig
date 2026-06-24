@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        go: [ '1.23.x' ]
+        go: [ '1.25.x' ]
 
     steps:
       - name: Checkout
@@ -66,15 +66,14 @@ jobs:
 
       - name: Composer audit (root)
         run: |
-          if [ -f composer.json ]; then
-            composer install --no-interaction --prefer-dist --no-progress
-            composer audit
+          if [ -f composer.json ] && [ -f composer.lock ]; then
+            composer audit --locked
           fi
 
       - name: Composer install and audit (php/)
         run: |
           if [ -f php/composer.json ]; then
-            cd php && composer install --no-interaction --prefer-dist --no-progress && composer audit
+            cd php && composer install --no-interaction --prefer-dist --no-progress && composer audit --locked
           fi
 
       - name: PHPUnit (php/)

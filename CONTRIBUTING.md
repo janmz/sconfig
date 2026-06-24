@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 ## Development
 
-- Go version: see `go.mod`.
+- Go version: see `go.mod` (currently Go 1.25+).
 - PHP 8.2+ and Composer for PHP checks (see `php/INSTALL.md`).
 - Run tests locally:
 
