@@ -107,11 +107,14 @@ func main() {
   der Datei im Klartext gespeichert).
 
 **Config-Pfade:** Pfade werden bereinigt und müssen **unterhalb des Verzeichnisses
-der ausführbaren Datei oder unterhalb des aktuellen Arbeitsverzeichnisses** liegen
-(das Aufrufsystem setzt dieses). Relative Pfade werden gegen das **aktuelle
-Arbeitsverzeichnis** aufgelöst (wie Go `filepath.Abs`). Den `debugOutput`-Parameter nur bei Fehleranalyse
-nutzen, wenn die ausgegebenen Angaben (Hardware-ID, Schlüsselmaterial, Pfade)
-nötig sind; im Normalbetrieb ausgeschaltet lassen.
+der ausführbaren Datei, unterhalb des aktuellen Arbeitsverzeichnisses** (das
+Aufrufsystem setzt dieses) **oder unterhalb des Benutzerverzeichnisses** liegen
+(`%USERPROFILE%` unter Windows, `~` unter Unix, z. B.
+`AppData\Roaming\<app>` oder `~/.config/<app>`). Relative Pfade werden gegen
+das **aktuelle Arbeitsverzeichnis** aufgelöst (wie Go `filepath.Abs`). Den
+`debugOutput`-Parameter nur bei Fehleranalyse nutzen, wenn die ausgegebenen
+Angaben (Hardware-ID, Schlüsselmaterial, Pfade) nötig sind; im Normalbetrieb
+ausgeschaltet lassen.
 
 ### Versionierung
 
@@ -222,7 +225,8 @@ Identifikatoren), wodurch sie auf anderen Systemen unbrauchbar sind.
 #### `.env`-Pfade
 
 Pfade werden bereinigt und müssen **unterhalb des PHP-Einstiegsskripts, unterhalb
-des aktuellen Arbeitsverzeichnisses** oder unter der mit
+des aktuellen Arbeitsverzeichnisses, unterhalb des Benutzerverzeichnisses**
+(`%USERPROFILE%` unter Windows, `~` unter Unix) oder unter der mit
 `EnvLoader::setExecutableRoot()` gesetzten Basis aufgelöst werden. Relative Pfade
 beziehen sich auf das **aktuelle Arbeitsverzeichnis**.
 
@@ -470,8 +474,8 @@ oder Reihenfolge ändert den Schlüssel:
 4. **Hardware-ID-Track**: Bei aktiviertem Debug wird jede Hardware-ID-Berechnung
    und jeder Entschlüsselungsfehler als Zeile in `sconfig.debug.txt` im
    Verzeichnis des Executables geschrieben. Format:
-   `YYYY-MM-DD HH:MM:SS<TAB>Hardware-ID (hex)<TAB>Identifikatoren`. So entsteht eine
-   Chronik der IDs (z. B. nach einem fehlgeschlagenen Entschlüsseln).
+   `YYYY-MM-DD HH:MM:SS<TAB>Hardware-ID (hex)<TAB>Identifikatoren`. So
+   entsteht eine Chronik der IDs (z. B. nach einem fehlgeschlagenen Entschlüsseln).
 
 ## Sicherheitshinweise
 

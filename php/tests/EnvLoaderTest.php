@@ -22,6 +22,8 @@ class EnvLoaderTest extends TestCase
         $this->tempDir = sys_get_temp_dir() . '/sconfig_php_test_' . uniqid('', true);
         mkdir($this->tempDir, 0700, true);
         EnvLoader::setExecutableRootForTest($this->tempDir);
+        // Pin home below tempDir so temp dirs under the real home stay disallowed.
+        EnvLoader::setHomeDirForTest($this->tempDir . DIRECTORY_SEPARATOR . 'home');
     }
 
     protected function tearDown(): void
@@ -41,6 +43,7 @@ class EnvLoaderTest extends TestCase
             rmdir($this->tempDir);
         }
         EnvLoader::setExecutableRootForTest(null);
+        EnvLoader::setHomeDirForTest(null);
         EnvLoader::clear();
         parent::tearDown();
     }
@@ -305,5 +308,25 @@ class EnvLoaderTest extends TestCase
         $outside = dirname($this->tempDir) . DIRECTORY_SEPARATOR . 'outside_' . uniqid('', true) . '.env';
         $this->expectException(\RuntimeException::class);
         EnvLoader::load($outside);
+    }
+
+    public function testLoadAllowsPathUnderHomeDirectory(): void
+    {
+        $home = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'sconfig_php_home_' . uniqid('', true);
+        $appData = $home . DIRECTORY_SEPARATOR . 'AppData' . DIRECTORY_SEPARATOR . 'Roaming';
+        mkdir($appData, 0700, true);
+        $envFile = $appData . DIRECTORY_SEPARATOR . 'app.env';
+        file_put_contents($envFile, "APP_NAME=home
+");
+        EnvLoader::setHomeDirForTest($home);
+        try {
+            EnvLoader::load($envFile);
+            self::assertSame('home', EnvLoader::get('APP_NAME'));
+        } finally {
+            unlink($envFile);
+            rmdir($appData);
+            rmdir(dirname($appData));
+            rmdir($home);
+        }
     }
 }

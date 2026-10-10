@@ -105,8 +105,10 @@ func main() {
   `cleanConfig` is set to `true`).
 
 **Config paths:** Paths are cleaned and must lie **under the directory of the
-running executable or under the process current working directory** (the
-caller controls the latter). Relative paths are resolved against the **current
+running executable, under the process current working directory** (the
+caller controls the latter) **or under the user's home directory**
+(`%USERPROFILE%` on Windows, `~` on Unix, e.g. `AppData\Roaming\<app>` or
+`~/.config/<app>`). Relative paths are resolved against the **current
 working directory** (same as Go `filepath.Abs`). Use `debugOutput` only when diagnosing
 failures and you need the printed values (hardware ID, key material, paths); keep
 it off in normal operation.
@@ -217,7 +219,8 @@ making them unusable on other systems.
 #### `.env` paths
 
 Paths are cleaned and must resolve **under the directory of the PHP entry script,
-under the current working directory,** or under the directory passed to
+under the current working directory, under the user's home directory**
+(`%USERPROFILE%` on Windows, `~` on Unix) or under the directory passed to
 `EnvLoader::setExecutableRoot()` at bootstrap. Relative paths are resolved
 against the **current working directory**.
 

@@ -3,9 +3,9 @@ package sconfig
 var (
 	// Version is the semantic-like version string of the library or consuming
 	// application embedding this package. The format is "Major.Minor.Patch.Build".
-	Version = "2.0.6.58" // Major, Minor, Patch, Build
+	Version = "2.0.8.61" // Major, Minor, Patch, Build
 
 	// BuildTime is the timestamp of the build, typically injected via -ldflags
 	// at build time.
-	BuildTime = "2026-10-10 15:49:18"
+	BuildTime = "2026-10-10 21:17:31"
 )

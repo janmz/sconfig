@@ -1,7 +1,7 @@
 <?php
 
 if (!function_exists('env')) {
-    
+
     /**
      * Get an environment variable value
      *
@@ -17,4 +17,3 @@ if (!function_exists('env')) {
         return \Sconfig\EnvLoader::get($key, $default);
     }
 }
-

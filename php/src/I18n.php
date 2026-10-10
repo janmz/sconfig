@@ -102,7 +102,7 @@ class I18n
     {
         // Try environment variables (same as Go version)
         $envVars = ['LANG', 'LC_ALL', 'LC_MESSAGES'];
-        
+
         foreach ($envVars as $envVar) {
             $lang = getenv($envVar);
             if ($lang !== false && $lang !== '') {
@@ -275,4 +275,3 @@ class I18n
         return self::translate($key, ...$args);
     }
 }
-

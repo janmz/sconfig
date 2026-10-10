@@ -12,11 +12,17 @@ import (
 )
 
 // testExeRoot returns a temp directory and pins it as the executable root for
-// path resolution tests. Paths may also lie under the real process CWD.
+// path resolution tests. Paths may also lie under the real process CWD. The
+// home directory is pinned to a subdirectory of root so that temp directories
+// below the real home (e.g. on Windows CI runners) do not become allowed.
 func testExeRoot(tb testing.TB) string {
 	root := tb.TempDir()
 	SetExecutableRootForTest(root)
-	tb.Cleanup(func() { SetExecutableRootForTest("") })
+	SetHomeDirForTest(filepath.Join(root, "home"))
+	tb.Cleanup(func() {
+		SetExecutableRootForTest("")
+		SetHomeDirForTest("")
+	})
 	return root
 }
 
@@ -743,6 +749,23 @@ func TestLoadConfigPathRejectsOutsideExecutable(ts *testing.T) {
 	err := LoadConfig(&TestConfig{}, 1, outside, false, false)
 	if err == nil {
 		ts.Fatal("expected error for config path outside executable directory and CWD")
+	}
+}
+
+func TestLoadConfigPathAllowsHomeDir(ts *testing.T) {
+	ResetForTest()
+	testExeRoot(ts)
+	home := ts.TempDir()
+	SetHomeDirForTest(home)
+	appData := filepath.Join(home, "AppData", "Roaming", "myapp")
+	if err := os.MkdirAll(appData, 0o700); err != nil {
+		ts.Fatalf("mkdir: %v", err)
+	}
+	if err := LoadConfig(&TestConfig{}, 1, filepath.Join(appData, "config.json"), false, false); err != nil {
+		ts.Fatalf("expected config path under home directory to be allowed: %v", err)
+	}
+	if err := LoadConfig(&TestConfig{}, 1, filepath.Join(home, "..", "escape.json"), false, false); err == nil {
+		ts.Fatal("expected error for config path escaping the home directory")
 	}
 }
 

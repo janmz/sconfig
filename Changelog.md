@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.7.60] - 2026-10-10
+
+### Fixed
+
+- **CI:** `govulncheck` auf v1.7.0 gepinnt (Workflow und
+  `scripts/ci-local.*`). `@latest` (v1.8.0) setzt Go 1.26 voraus und brach den
+  Workflow mit Go 1.25 ab.
+- **PHP:** Alle `phpcs`-Funde (PSR-12) in `src/`, `tests/` und `example.php`
+  behoben.
+- **Doku:** Alle `markdownlint`-Funde in den Markdown-Dateien behoben
+  (Zeilenlänge, Leerzeilen um Listen/Codeblöcke/Überschriften, nackte URL).
+
+---
+
+## [2.0.7.59] - 2026-10-10
+
+### Changed
+
+- **Go & PHP:** Config-/`.env`-Pfade dürfen jetzt zusätzlich unterhalb des
+  Benutzerverzeichnisses liegen (`%USERPROFILE%` unter Windows, `~` unter
+  Unix), z. B. `%USERPROFILE%\AppData\Roaming\<app>` oder `~/.config/<app>`.
+  Bisher wurden solche Pfade mit „path outside executable“ abgelehnt.
+  Neue Testhooks `SetHomeDirForTest()` (Go) und
+  `EnvLoader::setHomeDirForTest()` (PHP); Fehlermeldung
+  `config.path_outside_executable` in en/de ergänzt.
+
+---
+
 ## [2.0.6.58] - 2026-10-10
 
 ### Security
@@ -19,10 +47,11 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
-- **Windows:** Die Befehle zur Ermittlung der Hardware-ID (`wmic`, `reg`, `ipconfig`,
-  `route`, `netsh`) laufen jetzt ohne Konsolenfenster (`CREATE_NO_WINDOW`). In GUI-Programmen
-  (`-H windowsgui`) blitzten beim Laden/Speichern der Konfiguration sonst mehrere Fenster auf.
-  Die ermittelte Hardware-ID bleibt unverändert, verschlüsselte Werte bleiben lesbar.
+- **Windows:** Die Befehle zur Ermittlung der Hardware-ID (`wmic`, `reg`,
+  `ipconfig`, `route`, `netsh`) laufen jetzt ohne Konsolenfenster
+  (`CREATE_NO_WINDOW`). In GUI-Programmen (`-H windowsgui`) blitzten beim
+  Laden/Speichern der Konfiguration sonst mehrere Fenster auf. Die ermittelte
+  Hardware-ID bleibt unverändert, verschlüsselte Werte bleiben lesbar.
 
 ---
 

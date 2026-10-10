@@ -59,4 +59,3 @@ echo "German password marker: " . I18n::t('config.password_message') . "\n";
 // Switch back to English
 I18n::setLanguage('en');
 echo "English password marker: " . I18n::t('config.password_message') . "\n";
-

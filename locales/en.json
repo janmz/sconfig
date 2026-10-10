@@ -24,5 +24,5 @@
   "config.password_message":"Enter new password here",
   "config.read_failed": "failed to read config file: %v",
   "config.path_invalid": "invalid config path: %s",
-  "config.path_outside_executable": "config path must be under the executable directory or the current working directory: %s"
+  "config.path_outside_executable": "config path must be under the executable directory, the current working directory or the user home directory: %s"
 }

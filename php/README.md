@@ -1,6 +1,8 @@
 # sconfig (PHP)
 
-PHP library for loading and managing `.env` configuration files with secure password handling. This is the PHP variant of the [sconfig](https://github.com/janmz/sconfig) Go library.
+PHP library for loading and managing `.env` configuration files with secure
+password handling. This is the PHP variant of the
+[sconfig](https://github.com/janmz/sconfig) Go library.
 
 ## Installation
 
@@ -12,7 +14,8 @@ composer require janmz/sconfig
 
 ### Via Git Repository (development/current)
 
-If the package is not yet published on Packagist, you can install it directly from the Git repository:
+If the package is not yet published on Packagist, you can install it directly
+from the Git repository:
 
 ```bash
 composer require janmz/sconfig:dev-main --prefer-source
@@ -35,11 +38,13 @@ Or add to your `composer.json`:
 ```
 
 Then run:
+
 ```bash
 composer install
 ```
 
-**Note:** When installing from Git, you need to specify the path to the PHP package. The package is located in the `php/` subdirectory of the repository.
+**Note:** When installing from Git, you need to specify the path to the PHP
+package. The package is located in the `php/` subdirectory of the repository.
 
 ## Usage
 
@@ -63,7 +68,8 @@ $apiKey = env('API_KEY');
 
 ### Secure Password Handling
 
-The library automatically handles password encryption for fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD`:
+The library automatically handles password encryption for fields named
+`<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD`:
 
 ```php
 use Sconfig\EnvLoader;
@@ -76,6 +82,7 @@ $dbPassword = env('DB_PASSWORD'); // Returns decrypted value
 ```
 
 **How it works:**
+
 1. If `DB_PASSWORD` contains a plaintext password (not the marker), it will be encrypted
 2. The encrypted value is stored in `DB_SECURE_PASSWORD`
 3. `DB_PASSWORD` is replaced with the marker "Enter new password here"
@@ -93,7 +100,8 @@ DB_PASSWORD=Enter new password here
 DB_SECURE_PASSWORD=<encrypted_base64_string>
 ```
 
-The encrypted passwords are machine-bound (derived from hardware identifiers), making them unusable on other systems.
+The encrypted passwords are machine-bound (derived from hardware identifiers),
+making them unusable on other systems.
 
 ### Loading from Custom Path
 
@@ -164,7 +172,8 @@ if (EnvLoader::has('KEY')) {
 
 ## .env File Format
 
-The `.env` file should follow this format. An example file `example_env` is included in this package:
+The `.env` file should follow this format. An example file `example_env` is
+included in this package:
 
 ```env
 # Database Configuration
@@ -190,7 +199,8 @@ DEBUG=false
 - Empty lines are ignored
 - Values can be quoted with single or double quotes (quotes are automatically removed)
 - Spaces around `=` are automatically trimmed
-- **Password pairs**: Fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD` are automatically encrypted
+- **Password pairs**: Fields named `<NAME>_PASSWORD` and
+  `<NAME>_SECURE_PASSWORD` are automatically encrypted
 
 ## Features
 
@@ -214,18 +224,25 @@ cd php
 ./vendor/bin/phpunit
 ```
 
-Tests cover loading/parsing, override/cleanConfig, password encryption (marker on disk, plaintext in memory), and the `env()` helper.
+Tests cover loading/parsing, override/cleanConfig, password encryption (marker
+on disk, plaintext in memory), and the `env()` helper.
 
 ## API Reference
 
-### EnvLoader::load(string $filePath, bool $override = false, bool $cleanConfig = false)
+### EnvLoader::load()
+
+```php
+EnvLoader::load(string $filePath, bool $override = false, bool $cleanConfig = false)
+```
 
 Loads environment variables from a `.env` file and processes password encryption.
 
 **Parameters:**
+
 - `$filePath` - Path to the `.env` file
 - `$override` - Whether to override existing environment variables (default: false)
-- `$cleanConfig` - If true, decrypts passwords before writing (default: false, use with care)
+- `$cleanConfig` - If true, decrypts passwords before writing (default: false,
+  use with care)
 
 **Throws:** `RuntimeException` if the file cannot be read or encryption fails
 
@@ -234,6 +251,7 @@ Loads environment variables from a `.env` file and processes password encryption
 Global helper function to get an environment variable value.
 
 **Parameters:**
+
 - `$key` - The environment variable key
 - `$default` - Default value if key is not found
 
@@ -257,9 +275,13 @@ Check if environment has been loaded.
 
 ## Internationalization
 
-The library supports multiple languages and automatically detects the system language from environment variables (`LANG`, `LC_ALL`, `LC_MESSAGES`). Translations are loaded from the `locales/` directory (same JSON files as the Go version).
+The library supports multiple languages and automatically detects the system
+language from environment variables (`LANG`, `LC_ALL`, `LC_MESSAGES`).
+Translations are loaded from the `locales/` directory (same JSON files as the Go
+version).
 
 Supported languages:
+
 - English (en) - default/fallback
 - German (de)
 
@@ -273,16 +295,21 @@ $message = I18n::t('config.password_message'); // Get translated message
 ```
 
 The library automatically finds the `locales/` directory by searching:
+
 1. Parent directory of the PHP package (`../locales`)
 2. Project root (`./locales`)
 3. Current working directory (`./locales`)
 
 ## Security Notes
 
-- **Machine-bound encryption**: Passwords are encrypted using keys derived from hardware identifiers, making encrypted config files unusable on other systems
-- **Transparent decryption**: Passwords are automatically decrypted in memory for easy access via `env()`
-- **Use `cleanConfig` with care**: Setting `cleanConfig = true` writes plaintext passwords to the file
-- **Hardware ID**: The encryption key is generated from system hardware identifiers (MAC address, CPU ID, etc.)
+- **Machine-bound encryption**: Passwords are encrypted using keys derived from
+  hardware identifiers, making encrypted config files unusable on other systems
+- **Transparent decryption**: Passwords are automatically decrypted in memory
+  for easy access via `env()`
+- **Use `cleanConfig` with care**: Setting `cleanConfig = true` writes plaintext
+  passwords to the file
+- **Hardware ID**: The encryption key is generated from system hardware
+  identifiers (MAC address, CPU ID, etc.)
 
 ## License
 
@@ -290,9 +317,8 @@ The library automatically finds the `locales/` directory by searching:
 
 ## Author
 
-Jan Neuhaus, VAYA Consulting - https://vaya-consulting.de/
+Jan Neuhaus, VAYA Consulting - <https://vaya-consulting.de/>
 
 ## Related
 
 - [sconfig (Go version)](https://github.com/janmz/sconfig)
-

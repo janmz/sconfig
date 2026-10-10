@@ -24,5 +24,5 @@
   "config.load_first":"Zuerst muss eine Config geladen werden, bevor sie geschrieben werden kann",
   "config.password_message":"Hier neues Passwort eintragen",
   "config.path_invalid": "Ungültiger Config-Pfad: %s",
-  "config.path_outside_executable": "Config-Pfad liegt weder unter dem Verzeichnis der ausführbaren Datei noch unter dem aktuellen Arbeitsverzeichnis: %s"
+  "config.path_outside_executable": "Config-Pfad liegt weder unter dem Verzeichnis der ausführbaren Datei noch unter dem aktuellen Arbeitsverzeichnis noch unter dem Benutzerverzeichnis: %s"
 }

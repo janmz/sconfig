@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> govulncheck"
 if (-not (Get-Command govulncheck -ErrorAction SilentlyContinue)) {
-    go install golang.org/x/vuln/cmd/govulncheck@latest
+    go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 govulncheck ./...

@@ -11,9 +11,10 @@ package sconfig
  * hardware-/systemgebundenen Daten abgeleiteter Schlüssel, den nur diese Maschine
  * reproduzieren kann (ohne Zugriff auf die Hardware bzw. das System nicht erratbar).
  *
- * Version: 2.0.5.56 (in version.go zu ändern)
+ * Version: 2.0.8.61 (in version.go zu ändern)
  *
  * ChangeLog:
+ *  10.10.26	2.0.8	Feature: Allow config files in %USERPROFILE% or ~
  *  24.06.26	2.0.5	Fix: second try to handle empty composer.lock
  *  24.06.26	2.0.4	Fix: use 1.25.x in workflow. an composer audit --locked
  *  24.06.26	2.0.3	Fix: include a pre commit hook to prevent ci-workflow failures, import I18N and other ci workflow updates
@@ -108,6 +109,30 @@ func SetExecutableRootForTest(dir string) {
 	executableRootForTest = dir
 }
 
+// homeDirForTest, if set, replaces the user's home directory when resolving
+// config paths (tests only).
+var homeDirForTest string
+
+// SetHomeDirForTest pins the home directory under which LoadConfig/UpdateConfig
+// paths may lie. Pass an empty string to clear. For tests only; production uses
+// os.UserHomeDir() (%USERPROFILE% on Windows, $HOME on Unix).
+func SetHomeDirForTest(dir string) {
+	homeDirForTest = dir
+}
+
+// getHomeDirForConfigPaths returns the user's home directory, or "" if it
+// cannot be determined (then the home directory is simply not an allowed base).
+func getHomeDirForConfigPaths() string {
+	if homeDirForTest != "" {
+		return homeDirForTest
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
 func getExecutableDirForConfigPaths() (string, error) {
 	if executableRootForTest != "" {
 		return filepath.Abs(executableRootForTest)
@@ -138,8 +163,10 @@ func pathUnderBase(base, target string) (bool, error) {
 }
 
 // resolveConfigPath cleans the path, resolves it to an absolute path, and ensures
-// it lies under the executable directory (or executableRootForTest in tests) or
-// under the process current working directory. Relative paths are resolved with
+// it lies under the executable directory (or executableRootForTest in tests),
+// under the process current working directory, or under the user's home
+// directory (%USERPROFILE% on Windows, ~ on Unix, e.g. for AppData\Roaming or
+// ~/.config). Relative paths are resolved with
 // filepath.Abs (i.e. relative to the CWD), matching usual CLI expectations.
 func resolveConfigPath(path string) (string, error) {
 	clean := filepath.Clean(path)
@@ -163,7 +190,14 @@ func resolveConfigPath(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s", t("config.path_invalid", err))
 	}
-	if !underExe && !underCwd {
+	underHome := false
+	if home := getHomeDirForConfigPaths(); home != "" {
+		underHome, err = pathUnderBase(home, abs)
+		if err != nil {
+			return "", fmt.Errorf("%s", t("config.path_invalid", err))
+		}
+	}
+	if !underExe && !underCwd && !underHome {
 		return "", fmt.Errorf("%s", t("config.path_outside_executable", abs))
 	}
 	return abs, nil

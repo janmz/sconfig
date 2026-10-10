@@ -18,7 +18,7 @@ go vet ./...
 
 echo "==> govulncheck"
 if ! command -v govulncheck >/dev/null 2>&1; then
-	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 fi
 govulncheck ./...
 

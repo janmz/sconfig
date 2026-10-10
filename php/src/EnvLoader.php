@@ -37,6 +37,11 @@ class EnvLoader
      * (tests and applications that set an explicit base).
      */
     private static ?string $executableRootOverride = null;
+
+    /**
+     * Optional override for the user's home directory (tests only).
+     */
+    private static ?string $homeDirOverride = null;
     /**
      * Get the password marker string for the current language
      *
@@ -57,18 +62,18 @@ class EnvLoader
     {
         I18n::initialize();
         $currentLang = I18n::getCurrentLanguage();
-        
+
         // Get English marker
         I18n::setLanguage('en');
         $enMarker = I18n::t('config.password_message');
-        
+
         // Get German marker
         I18n::setLanguage('de');
         $deMarker = I18n::t('config.password_message');
-        
+
         // Restore original language
         I18n::setLanguage($currentLang);
-        
+
         return ['en' => $enMarker, 'de' => $deMarker];
     }
 
@@ -155,6 +160,40 @@ class EnvLoader
     }
 
     /**
+     * @internal For tests only: pin the home directory (null = real home).
+     */
+    public static function setHomeDirForTest(?string $directory): void
+    {
+        self::$homeDirOverride = $directory;
+    }
+
+    /**
+     * Determine the user's home directory (%USERPROFILE% on Windows, $HOME on
+     * Unix), mirroring Go's os.UserHomeDir().
+     *
+     * @return string|null Home directory, or null if it cannot be determined
+     */
+    private static function getHomeDirectory(): ?string
+    {
+        if (self::$homeDirOverride !== null) {
+            return self::$homeDirOverride;
+        }
+        $home = getenv(PHP_OS_FAMILY === 'Windows' ? 'USERPROFILE' : 'HOME');
+        if (is_string($home) && $home !== '') {
+            return $home;
+        }
+        $hasPosix = function_exists('posix_getpwuid') && function_exists('posix_geteuid');
+        if (PHP_OS_FAMILY !== 'Windows' && $hasPosix) {
+            $info = posix_getpwuid(posix_geteuid());
+            if (is_array($info) && is_string($info['dir'] ?? null) && $info['dir'] !== '') {
+                return $info['dir'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @return string Absolute base directory for .env path resolution
      */
     private static function getExecutableDirectoryForEnvPaths(): string
@@ -162,8 +201,9 @@ class EnvLoader
         if (self::$executableRootOverride !== null) {
             return self::$executableRootOverride;
         }
-        if (isset($_SERVER['SCRIPT_FILENAME']) && is_string($_SERVER['SCRIPT_FILENAME']) && $_SERVER['SCRIPT_FILENAME'] !== '') {
-            $dir = dirname($_SERVER['SCRIPT_FILENAME']);
+        $script = $_SERVER['SCRIPT_FILENAME'] ?? null;
+        if (is_string($script) && $script !== '') {
+            $dir = dirname($script);
             $real = realpath($dir);
 
             return $real !== false ? $real : $dir;
@@ -186,8 +226,9 @@ class EnvLoader
     }
 
     /**
-     * Clean path and ensure it lies under the script/executable base or the
-     * current working directory (getcwd()).
+     * Clean path and ensure it lies under the script/executable base, the
+     * current working directory (getcwd()) or the user's home directory
+     * (%USERPROFILE% on Windows, ~ on Unix, e.g. AppData\Roaming or ~/.config).
      *
      * @throws \RuntimeException If the path is invalid or escapes both bases
      */
@@ -228,6 +269,13 @@ class EnvLoader
         if ($cwdReal !== false) {
             $bases[] = $cwdReal;
         }
+        $home = self::getHomeDirectory();
+        if ($home !== null) {
+            $homeReal = realpath($home);
+            if ($homeReal !== false) {
+                $bases[] = $homeReal;
+            }
+        }
         $bases = array_values(array_unique($bases));
 
         $finalNorm = str_replace('\\', '/', $final);
@@ -244,7 +292,7 @@ class EnvLoader
     /**
      * Load environment variables from a .env file with password encryption support
      *
-     * @param string $filePath Path to the .env file (must lie under the script/executable directory or CWD)
+     * @param string $filePath Path to the .env file (under script/executable dir, CWD or home dir)
      * @param bool $override Whether to override existing environment variables
      * @param bool $cleanConfig If true, decrypts passwords before writing (use with care)
      * @return void
@@ -254,7 +302,7 @@ class EnvLoader
     {
         // Initialize i18n first
         I18n::initialize();
-        
+
         self::initializeEncryption();
 
         $filePath = self::resolveEnvFilePath($filePath);
@@ -281,7 +329,7 @@ class EnvLoader
 
         foreach ($lines as $lineNum => $line) {
             $trimmed = trim($line);
-            
+
             // Preserve comments and empty lines
             if (empty($trimmed) || strpos($trimmed, '#') === 0) {
                 $lineData[] = ['type' => 'comment', 'content' => $line];
@@ -295,8 +343,10 @@ class EnvLoader
                 $value = trim($value);
 
                 // Remove quotes if present
-                if ((substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
-                    (substr($value, 0, 1) === "'" && substr($value, -1) === "'")) {
+                if (
+                    (substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
+                    (substr($value, 0, 1) === "'" && substr($value, -1) === "'")
+                ) {
                     $value = substr($value, 1, -1);
                 }
 
@@ -318,7 +368,7 @@ class EnvLoader
         foreach ($parsed as $key => $value) {
             if ($override || !isset(self::$cache[$key])) {
                 self::$cache[$key] = $value;
-                
+
                 if ($override || !isset($_ENV[$key])) {
                     $_ENV[$key] = $value;
                     putenv("{$key}={$value}");
@@ -361,8 +411,10 @@ class EnvLoader
 
         foreach ($parsed as $key => $value) {
             // Check if this is a Password field (not SecurePassword)
-            if (preg_match('/^(.+)_PASSWORD$/i', $key, $matches) && 
-                !preg_match('/^(.+)_SECURE_PASSWORD$/i', $key)) {
+            if (
+                preg_match('/^(.+)_PASSWORD$/i', $key, $matches) &&
+                !preg_match('/^(.+)_SECURE_PASSWORD$/i', $key)
+            ) {
                 $prefix = $matches[1];
                 $securePasswordKey = $prefix . '_SECURE_PASSWORD';
 
@@ -381,12 +433,12 @@ class EnvLoader
                 if ($value !== '') {
                     // Encrypt the password
                     $encrypted = self::encrypt($value);
-                    
+
                     // Ensure SECURE_PASSWORD field exists (create if it doesn't)
                     if (!isset($parsed[$securePasswordKey])) {
                         $parsed[$securePasswordKey] = '';
                     }
-                    
+
                     // Set encrypted value in SECURE_PASSWORD
                     $parsed[$securePasswordKey] = $encrypted;
                     // Replace plaintext with marker
@@ -463,7 +515,7 @@ class EnvLoader
         // First, write all original lines, updating values as needed
         foreach ($originalLines as $line) {
             $trimmed = trim($line);
-            
+
             if (empty($trimmed) || strpos($trimmed, '#') === 0) {
                 $output[] = $line;
                 continue;
@@ -472,7 +524,7 @@ class EnvLoader
             if (strpos($line, '=') !== false) {
                 [$key] = explode('=', $line, 2);
                 $key = trim($key);
-                
+
                 if (isset($parsed[$key])) {
                     $value = $parsed[$key];
                     // Preserve quotes if original had them
@@ -481,7 +533,7 @@ class EnvLoader
                         $quoted = true;
                         $quote = substr($line, strpos($line, '=') + 1, 1);
                     }
-                    
+
                     if ($quoted) {
                         $output[] = $key . '=' . $quote . $value . $quote;
                     } else {
@@ -563,19 +615,21 @@ class EnvLoader
                         $model = strtolower(trim(substr($line, 6)));
                     }
                 }
-                
+
                 $vmIndicators = [
                     'vmware', 'virtualbox', 'microsoft corporation', 'xen',
                     'parallels', 'qemu', 'kvm', 'innotek', 'bochs'
                 ];
-                
+
                 foreach ($vmIndicators as $indicator) {
-                    if (strpos($manufacturer, $indicator) !== false || 
-                        strpos($model, $indicator) !== false) {
+                    if (
+                        strpos($manufacturer, $indicator) !== false ||
+                        strpos($model, $indicator) !== false
+                    ) {
                         return true;
                     }
                 }
-                
+
                 // Check for Hyper-V (Virtual Machine in Model)
                 if (strpos($model, 'virtual') !== false) {
                     return true;
@@ -657,7 +711,7 @@ class EnvLoader
                         }
                     }
                 }
-                
+
                 // 2. SMBIOS UUID (usually stable on VMs)
                 $output = @shell_exec('wmic csproduct get UUID /value 2>nul');
                 if ($output) {
@@ -693,7 +747,7 @@ class EnvLoader
                 'wmic baseboard get Product /value',
                 'wmic diskdrive get SerialNumber /value',
             ];
-            
+
             if (!$isVM) {
                 // Only use CPU ProcessorId on physical machines
                 $commands[] = 'wmic cpu get ProcessorId /value';
@@ -724,7 +778,7 @@ class EnvLoader
                 if ($machineId && trim($machineId) !== '') {
                     $identifiers[] = trim($machineId);
                 }
-                
+
                 // 2. product_uuid (usually stable on VMs)
                 $productUuid = @file_get_contents('/sys/class/dmi/id/product_uuid');
                 if ($productUuid && trim($productUuid) !== '') {
@@ -763,7 +817,7 @@ class EnvLoader
         // Combine identifiers and create hash
         $combined = implode('|', $identifiers);
         $hash = hash('sha256', $combined, true);
-        
+
         // Return first 64 bits as integer (similar to Go implementation)
         $result = 0;
         for ($i = 0; $i < 8; $i++) {
@@ -782,7 +836,7 @@ class EnvLoader
     private static function encrypt(string $text): string
     {
         I18n::initialize();
-        
+
         if (self::$encryptionKey === null) {
             throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
         }
@@ -790,10 +844,10 @@ class EnvLoader
         $method = 'aes-256-gcm';
         $ivLength = openssl_cipher_iv_length($method);
         $iv = openssl_random_pseudo_bytes($ivLength);
-        
+
         $tag = '';
         $encrypted = openssl_encrypt($text, $method, self::$encryptionKey, OPENSSL_RAW_DATA, $iv, $tag);
-        
+
         if ($encrypted === false) {
             throw new \RuntimeException(I18n::t('config.failed_checking', 'encryption'));
         }
@@ -813,7 +867,7 @@ class EnvLoader
     private static function decrypt(string $encryptedText): string
     {
         I18n::initialize();
-        
+
         if (self::$encryptionKey === null) {
             throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
         }
@@ -834,7 +888,7 @@ class EnvLoader
         $ciphertext = substr($data, $ivLength + $tagLength);
 
         $decrypted = openssl_decrypt($ciphertext, $method, self::$encryptionKey, OPENSSL_RAW_DATA, $iv, $tag);
-        
+
         if ($decrypted === false) {
             throw new \RuntimeException(I18n::t('config.decrypt_failed', '', 'decryption'));
         }
@@ -934,8 +988,10 @@ class EnvLoader
                         [$key, $value] = explode('=', $line, 2);
                         $key = trim($key);
                         $value = trim($value);
-                        if ((substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
-                            (substr($value, 0, 1) === "'" && substr($value, -1) === "'")) {
+                        if (
+                            (substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
+                            (substr($value, 0, 1) === "'" && substr($value, -1) === "'")
+                        ) {
                             $value = substr($value, 1, -1);
                         }
                         $parsed[$key] = $value;
