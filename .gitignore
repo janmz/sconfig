@@ -16,3 +16,8 @@ i18n_test.go
 # Ensure PHP source files are tracked (explicitly include)
 !php/src/*.php
 !php/example.php
+# AI instructions
+AGENTS.md
+CLAUDE.md
+.claude/
+.cursorrules

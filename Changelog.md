@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.6.58] - 2026-10-10
+
+### Security
+
+- **Go:** `golang.org/x/text` von v0.28.0 auf v0.41.0 angehoben
+  (GO-2026-5970, GO-2026-6629). v0.41.0 ist die kleinste Version mit Fix, die
+  noch Go 1.25 unterstützt.
+- **PHP (dev):** `squizlabs/php_codesniffer` von 3.13.5 auf 3.13.6 angehoben
+  (CVE-2026-67434, OS Command Injection); `composer audit` im Pre-Commit-Hook
+  und in der CI ist wieder grün.
+
+---
+
 ## [2.0.6.57] - 2026-10-10
 
 ### Fixed
