@@ -217,7 +217,7 @@ func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
 func isVirtualMachine() bool {
 	if runtime.GOOS == "windows" {
 		// Windows VM detection using WMI
-		out, err := exec.Command("wmic", "computersystem", "get", "Manufacturer,Model", "/value").Output()
+		out, err := newCommand("wmic", "computersystem", "get", "Manufacturer,Model", "/value").Output()
 		if err == nil {
 			manufacturer := ""
 			model := ""
@@ -254,7 +254,7 @@ func isVirtualMachine() bool {
 	}
 
 	// Method 1: systemd-detect-virt (most reliable)
-	out, err := exec.Command("systemd-detect-virt").Output()
+	out, err := newCommand("systemd-detect-virt").Output()
 	if err == nil {
 		virt := strings.TrimSpace(string(out))
 		// Returns "none" on bare metal, or VM type (kvm, vmware, qemu, etc.)
@@ -299,7 +299,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 	case "windows":
 		// On Windows, use "route print" to find the interface with default route (0.0.0.0)
 		// First, get the interface index from the route table
-		out, err := exec.Command("cmd", "/C", "route print 0.0.0.0").Output()
+		out, err := newCommand("cmd", "/C", "route print 0.0.0.0").Output()
 		if err == nil {
 			output := string(out)
 			lines := strings.Split(output, "\n")
@@ -317,7 +317,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 
 			if interfaceIndex != "" {
 				// Now find the interface name by index using "netsh interface show interface"
-				out2, err2 := exec.Command("cmd", "/C", "netsh interface show interface").Output()
+				out2, err2 := newCommand("cmd", "/C", "netsh interface show interface").Output()
 				if err2 == nil {
 					lines2 := strings.Split(string(out2), "\n")
 					for _, line := range lines2 {
@@ -332,7 +332,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 
 				// Alternative: use wmic to get interface name by index
 				cmd := fmt.Sprintf("wmic path Win32_NetworkAdapter where \"InterfaceIndex=%s\" get Name", interfaceIndex)
-				out3, err3 := exec.Command("cmd", "/C", cmd).Output()
+				out3, err3 := newCommand("cmd", "/C", cmd).Output()
 				if err3 == nil {
 					lines3 := strings.Split(string(out3), "\n")
 					for _, line := range lines3 {
@@ -349,7 +349,7 @@ func getActiveNetworkInterface(debugOutput bool) string {
 		}
 
 		// Fallback: use ipconfig to find the adapter with default gateway
-		out, err = exec.Command("cmd", "/C", "ipconfig").Output()
+		out, err = newCommand("cmd", "/C", "ipconfig").Output()
 		if err == nil {
 			lines := strings.Split(string(out), "\n")
 			var currentAdapter string
@@ -387,10 +387,10 @@ func getActiveNetworkInterface(debugOutput bool) string {
 		// On Linux/Mac, use "ip route get" or "route get" to find the interface for default route
 		var cmd *exec.Cmd
 		if runtime.GOOS == "linux" {
-			cmd = exec.Command("ip", "route", "get", "8.8.8.8")
+			cmd = newCommand("ip", "route", "get", "8.8.8.8")
 		} else {
 			// macOS
-			cmd = exec.Command("route", "-n", "get", "8.8.8.8")
+			cmd = newCommand("route", "-n", "get", "8.8.8.8")
 		}
 		out, err := cmd.Output()
 		if err == nil {
@@ -473,7 +473,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 			if debugOutput {
 				fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Using ipconfig /all to find active adapter\n")
 			}
-			out, err := exec.Command("cmd", "/C", "ipconfig /all").Output()
+			out, err := newCommand("cmd", "/C", "ipconfig /all").Output()
 			if err == nil {
 				output := string(out)
 				lines := strings.Split(output, "\n")
@@ -561,7 +561,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 
 		case "linux":
 			// On Linux, get interface name from route, then find MAC
-			cmd := exec.Command("ip", "route", "get", "8.8.8.8")
+			cmd := newCommand("ip", "route", "get", "8.8.8.8")
 			out, err := cmd.Output()
 			if err == nil {
 				output := string(out)
@@ -596,7 +596,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 
 		case "darwin":
 			// On macOS, get interface name from route, then find MAC
-			cmd := exec.Command("route", "-n", "get", "8.8.8.8")
+			cmd := newCommand("route", "-n", "get", "8.8.8.8")
 			out, err := cmd.Output()
 			if err == nil {
 				output := string(out)
@@ -670,7 +670,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		if isVM {
 			// For Windows VMs: prioritize stable identifiers
 			// 1. MachineGuid from Registry (very stable on Windows)
-			out, err := exec.Command("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid").Output()
+			out, err := newCommand("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid").Output()
 			if err == nil {
 				lines := strings.Split(string(out), "\n")
 				for _, line := range lines {
@@ -690,7 +690,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 			}
 
 			// 2. SMBIOS UUID (usually stable on VMs)
-			out, err = exec.Command("wmic", "csproduct", "get", "UUID", "/value").Output()
+			out, err = newCommand("wmic", "csproduct", "get", "UUID", "/value").Output()
 			if err == nil {
 				lines := strings.Split(string(out), "\n")
 				for _, line := range lines {
@@ -725,7 +725,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		}
 
 		for _, cmdInfo := range baseboardCmds {
-			out, err := exec.Command("cmd", "/C", cmdInfo.cmd).Output()
+			out, err := newCommand("cmd", "/C", cmdInfo.cmd).Output()
 			if err == nil {
 				lines := strings.Split(string(out), "\n")
 				if len(lines) > 1 {
@@ -741,7 +741,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		}
 
 		// Handle diskdrive SerialNumber separately to ensure stable ordering
-		out, err := exec.Command("cmd", "/C", "wmic diskdrive get SerialNumber").Output()
+		out, err := newCommand("cmd", "/C", "wmic diskdrive get SerialNumber").Output()
 		if err == nil {
 			lines := strings.Split(string(out), "\n")
 			var diskSerials []string
@@ -773,7 +773,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		// On VMs, skip CPU ProcessorId as it's often unreliable
 		if !isVM {
 			// For CPU ProcessorId, collect all values and use the first one (sorted) for stability
-			out, err := exec.Command("cmd", "/C", "wmic cpu get ProcessorId").Output()
+			out, err := newCommand("cmd", "/C", "wmic cpu get ProcessorId").Output()
 			if err == nil {
 				lines := strings.Split(string(out), "\n")
 				var cpuIds []string
@@ -833,7 +833,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		// Only add CPU serial if not on VM (often unreliable on VMs)
 		if !isVM {
 			// For CPU serial, collect all values and use the first one (sorted) for stability
-			out, err := exec.Command("sh", "-c", "cat /proc/cpuinfo | grep 'Serial'").Output()
+			out, err := newCommand("sh", "-c", "cat /proc/cpuinfo | grep 'Serial'").Output()
 			if err == nil {
 				lines := strings.Split(string(out), "\n")
 				var cpuSerials []string
@@ -879,7 +879,7 @@ func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
 		}
 
 		for _, cmd := range cmds {
-			out, err := exec.Command("sh", "-c", cmd).Output()
+			out, err := newCommand("sh", "-c", cmd).Output()
 			if err == nil {
 				value := strings.TrimSpace(string(out))
 				if value != "" {

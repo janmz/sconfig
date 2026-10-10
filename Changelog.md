@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.6.57] - 2026-10-10
+
+### Fixed
+
+- **Windows:** Die Befehle zur Ermittlung der Hardware-ID (`wmic`, `reg`, `ipconfig`,
+  `route`, `netsh`) laufen jetzt ohne Konsolenfenster (`CREATE_NO_WINDOW`). In GUI-Programmen
+  (`-H windowsgui`) blitzten beim Laden/Speichern der Konfiguration sonst mehrere Fenster auf.
+  Die ermittelte Hardware-ID bleibt unverändert, verschlüsselte Werte bleiben lesbar.
+
+---
+
 ## [2.0.4.55] - 2026-06-24
 
 ### Fixed
