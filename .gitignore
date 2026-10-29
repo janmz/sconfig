@@ -21,3 +21,10 @@ AGENTS.md
 CLAUDE.md
 .claude/
 .cursorrules
+
+# Reports with attack information (never commit)
+securityreport.md
+codereview.md
+# Tool caches
+.php-cs-fixer.cache
+php/.php-cs-fixer.cache

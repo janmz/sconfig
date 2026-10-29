@@ -6,7 +6,7 @@
  */
 
 $autoload = dirname(__DIR__) . '/vendor/autoload.php';
-if (!is_file($autoload)) {
+if (! is_file($autoload)) {
     throw new RuntimeException('Run "composer install" in the php directory first.');
 }
 require $autoload;
@@ -19,6 +19,7 @@ $localesCandidates = [
 foreach ($localesCandidates as $path) {
     if (is_dir($path) && is_file($path . '/en.json')) {
         \Sconfig\I18n::initialize($path);
+
         break;
     }
 }

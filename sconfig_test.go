@@ -514,15 +514,24 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 		configPath1 := filepath.Join(tempDir, "different_hw1.json")
 		configPath2 := filepath.Join(tempDir, "different_hw2.json")
 
+		ResetForTest()
 		err1 := LoadConfig(config1, 1, configPath1, false, false, hardwareID1)
 		if err1 != nil {
 			ts.Fatalf("LoadConfig failed for config1: %v", err1)
 		}
 
+		ResetForTest()
 		err2 := LoadConfig(config2, 1, configPath2, false, false, hardwareID2)
 		if err2 != nil {
 			ts.Fatalf("LoadConfig failed for config2: %v", err2)
 		}
+
+		// Different hardware IDs must produce different keys: the file written
+		// with hardwareID1 must not decrypt with hardwareID2.
+		if err := LoadConfig(&TestConfig{}, 1, configPath1, false, false, hardwareID2); err == nil {
+			ts.Error("file encrypted with hardwareID1 must not decrypt with hardwareID2")
+		}
+		ResetForTest()
 
 		// Different hardware IDs should produce different encrypted passwords
 		if config1.DatabaseSecurePassword == config2.DatabaseSecurePassword {
@@ -536,58 +545,28 @@ func TestLoadConfig_CustomHardwareID(ts *testing.T) {
 	})
 
 	ts.Run("Hardware ID change breaks decryption", func(ts *testing.T) {
-		// Test that changing hardware ID breaks decryption of previously encrypted data
-		// Note: Due to global initialization state, this test verifies that encryption
-		// with different hardware IDs produces different encrypted values, which is the
-		// key security property we want to test.
-		config1 := &TestConfig{
-			DatabasePassword: "test-password-secure",
-		}
-		config2 := &TestConfig{
-			DatabasePassword: "test-password-secure", // Same password
-		}
-
-		hardwareID1 := func() (uint64, error) {
-			return 33333, nil
-		}
-		hardwareID2 := func() (uint64, error) {
-			return 44444, nil // Different hardware ID
-		}
-
 		configPath1 := filepath.Join(tempDir, "hw_change_test1.json")
-		configPath2 := filepath.Join(tempDir, "hw_change_test2.json")
+		hardwareID1 := func() (uint64, error) { return 33333, nil }
+		hardwareID2 := func() (uint64, error) { return 44444, nil }
 
-		// Encrypt with first hardware ID
-		err1 := LoadConfig(config1, 1, configPath1, false, false, hardwareID1)
-		if err1 != nil {
-			ts.Fatalf("LoadConfig failed for config1: %v", err1)
+		ResetForTest()
+		config1 := &TestConfig{DatabasePassword: "test-password-secure"}
+		if err := LoadConfig(config1, 1, configPath1, false, false, hardwareID1); err != nil {
+			ts.Fatalf("LoadConfig failed for config1: %v", err)
 		}
-
-		// Encrypt with second hardware ID (different)
-		// Note: Due to global initialization, this will use the key from hardwareID1
-		// but we can still verify that the encryption produces different results
-		// when called with different hardware IDs in separate test runs
-		err2 := LoadConfig(config2, 1, configPath2, false, false, hardwareID2)
-		if err2 != nil {
-			ts.Fatalf("LoadConfig failed for config2: %v", err2)
-		}
-
-		// Both should decrypt correctly with their respective hardware IDs
-		// (in a real scenario, they would use different keys)
 		if config1.DatabasePassword != "test-password-secure" {
 			ts.Errorf("Expected config1 password to be 'test-password-secure', got '%s'", config1.DatabasePassword)
 		}
-		if config2.DatabasePassword != "test-password-secure" {
-			ts.Errorf("Expected config2 password to be 'test-password-secure', got '%s'", config2.DatabasePassword)
-		}
 
-		// The key test: encrypted values should be different (even with same password)
-		// due to random nonce, but more importantly, they should not be decryptable
-		// with the wrong hardware ID in a real scenario
-		if config1.DatabaseSecurePassword == config2.DatabaseSecurePassword {
-			// This is acceptable due to random nonce, but in practice they should differ
-			ts.Log("Note: Encrypted passwords are the same (possible but unlikely due to random nonce)")
+		ResetForTest()
+		err := LoadConfig(&TestConfig{}, 1, configPath1, false, false, hardwareID2)
+		if err == nil {
+			ts.Fatal("decryption with a different hardware ID must fail")
 		}
+		if !strings.Contains(err.Error(), "message authentication failed") {
+			ts.Errorf("expected decrypt_failed error, got: %v", err)
+		}
+		ResetForTest()
 	})
 }
 
@@ -626,8 +605,8 @@ func TestUpdateConfig_ThemeAndEncryption(ts *testing.T) {
 	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "theme_config.json")
 	cfg := &UpdateConfigTestConfig{
-		Version: 1,
-		Theme:   "dark",
+		Version:    1,
+		Theme:      "dark",
 		DBPassword: "secret",
 	}
 	// Load first to initialize encryption
@@ -669,8 +648,8 @@ func TestUpdateConfig_CleanConfig(ts *testing.T) {
 	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "clean_config.json")
 	cfg := &UpdateConfigTestConfig{
-		Version: 1,
-		Theme:   "dark",
+		Version:    1,
+		Theme:      "dark",
 		DBPassword: "secret",
 	}
 	err := LoadConfig(cfg, 1, configPath, false, false)
@@ -878,13 +857,16 @@ func TestLoadConfig_DefaultHardwareID(ts *testing.T) {
 	})
 }
 
-// hardwareIDFromCombined computes the same uint64 hardware ID as sconfig from
-// the combined identifiers string (e.g. "id1|id2").
+// hardwareIDFromCombined hashes an identifier string exactly as given (no
+// sorting) like production does after sorting: SHA-256, first 8 bytes read
+// little-endian.
 func hardwareIDFromCombined(combined string) uint64 {
 	h := sha256.Sum256([]byte(combined))
-	return uint64(h[0])<<56 | uint64(h[1])<<48 | uint64(h[2])<<40 |
-		uint64(h[3])<<32 | uint64(h[4])<<24 | uint64(h[5])<<16 |
-		uint64(h[6])<<8 | uint64(h[7])
+	var id uint64
+	for i := 7; i >= 0; i-- {
+		id = id<<8 | uint64(h[i])
+	}
+	return id
 }
 
 // TestGo123KeySource_Determinism verifies that the Go 1.23–compatible key source
@@ -994,6 +976,8 @@ func TestRoundtrip_EncryptDecrypt(ts *testing.T) {
 // secure password field is valid base64 and has expected minimal length
 // (nonce + tag), for debugging production decryption failures.
 func TestCiphertextIntegrity(ts *testing.T) {
+	ResetForTest()
+	defer ResetForTest()
 	hwID := hardwareIDFromCombined("integrity-test")
 	tempDir := testExeRoot(ts)
 	configPath := filepath.Join(tempDir, "integrity.json")
@@ -1014,7 +998,13 @@ func TestCiphertextIntegrity(ts *testing.T) {
 	if err := json.Unmarshal(raw, &onDisk); err != nil {
 		ts.Fatalf("unmarshal config: %v", err)
 	}
-	cipherB64 := onDisk.DatabaseSecurePassword
+	names, cipherB64, err := parseV2Value(onDisk.DatabaseSecurePassword)
+	if err != nil {
+		ts.Fatalf("DatabaseSecurePassword is not a v2 value: %v (%q)", err, onDisk.DatabaseSecurePassword)
+	}
+	if len(names) != 1 || names[0] != sourceOverride {
+		ts.Errorf("expected source list [override], got %v", names)
+	}
 	decoded, err := base64.StdEncoding.DecodeString(cipherB64)
 	if err != nil {
 		ts.Fatalf("DatabaseSecurePassword is not valid base64: %v", err)

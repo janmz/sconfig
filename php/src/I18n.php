@@ -5,15 +5,25 @@ namespace Sconfig;
 /**
  * I18n - Internationalization support for sconfig (PHP)
  *
- * Loads translations from the locales/ directory and provides
- * translation functionality similar to the Go version.
+ * The built-in translations are shipped in php/locales (copies of the Go
+ * locales). Additional or overriding translations are only loaded from a
+ * directory that the application passes explicitly to initialize(); the
+ * password marker is always taken from the built-in translations.
  *
  * @package Sconfig
  */
 class I18n
 {
+    /** Maximum size of a translation file. */
+    private const MAX_FILE_SIZE = 1048576;
+
     /**
-     * @var array<string, array<string, string>> Loaded translations by language
+     * @var array<string, array<string, string>> Built-in translations by language
+     */
+    private static array $builtin = [];
+
+    /**
+     * @var array<string, array<string, string>> Built-in plus external translations
      */
     private static array $translations = [];
 
@@ -28,14 +38,10 @@ class I18n
     private static bool $initialized = false;
 
     /**
-     * @var string|null Path to locales directory
-     */
-    private static ?string $localesPath = null;
-
-    /**
-     * Initialize the i18n system
+     * Initialize the i18n system.
      *
-     * @param string|null $localesPath Optional path to locales directory
+     * @param string|null $localesPath Optional directory with additional or
+     *        overriding translation files (<lang>.json)
      * @return void
      */
     public static function initialize(?string $localesPath = null): void
@@ -43,172 +49,78 @@ class I18n
         if (self::$initialized) {
             return;
         }
-
-        // Try to find locales directory
-        if ($localesPath === null) {
-            $localesPath = self::findLocalesDirectory();
-        }
-
-        self::$localesPath = $localesPath;
-
-        // Detect system language
         self::$currentLanguage = self::detectLanguage();
-
-        // Load translations
-        self::loadTranslations();
-
+        self::$builtin = self::readDirectory(self::findBuiltinDirectory());
+        self::$translations = self::$builtin;
+        if ($localesPath !== null && realpath($localesPath) !== realpath(self::findBuiltinDirectory())) {
+            foreach (self::readDirectory($localesPath) as $lang => $messages) {
+                self::$translations[$lang] = array_merge(self::$translations[$lang] ?? [], $messages);
+            }
+        }
         self::$initialized = true;
     }
 
     /**
-     * Find the locales directory
-     *
-     * Tries to find the locales directory relative to the package or project root.
-     *
-     * @return string Path to locales directory
+     * Directory of the built-in translations: php/locales (Composer package)
+     * or, in the repository, the shared locales directory.
      */
-    private static function findLocalesDirectory(): string
+    private static function findBuiltinDirectory(): string
     {
-        // Try several possible locations
-        $possiblePaths = [
-            // From PHP package directory: ../locales (parent directory)
-            __DIR__ . '/../../locales',
-            // From project root: ./locales
-            __DIR__ . '/../../../locales',
-            // From vendor directory: ../../../../locales
-            __DIR__ . '/../../../../locales',
-            // Current directory
-            getcwd() . '/locales',
-            // Relative to composer vendor directory
-            dirname(dirname(dirname(__DIR__))) . '/locales',
-        ];
-
-        foreach ($possiblePaths as $path) {
-            if (is_dir($path) && file_exists($path . '/en.json')) {
+        foreach ([__DIR__ . '/../locales', __DIR__ . '/../../locales'] as $path) {
+            if (is_file($path . '/en.json')) {
                 return $path;
             }
         }
 
-        // Fallback: return a default path (will fail gracefully if not found)
-        return __DIR__ . '/../../locales';
+        return __DIR__ . '/../locales';
     }
 
     /**
-     * Detect system language from environment variables
+     * Read all <lang>.json files of a directory; invalid files are skipped.
+     *
+     * @return array<string, array<string, string>>
+     */
+    private static function readDirectory(string $dir): array
+    {
+        $result = [];
+        $files = is_dir($dir) ? glob($dir . '/*.json') : false;
+        if ($files === false) {
+            return $result;
+        }
+        foreach ($files as $file) {
+            $data = @file_get_contents($file, false, null, 0, self::MAX_FILE_SIZE + 1);
+            if ($data !== false && strlen($data) > self::MAX_FILE_SIZE) {
+                continue; // too large: ignored
+            }
+            $messages = $data === false ? null : json_decode($data, true);
+            if (! is_array($messages)) {
+                continue;
+            }
+            $result[basename($file, '.json')] = array_filter($messages, 'is_string');
+        }
+
+        return $result;
+    }
+
+    /**
+     * Detect the language from the environment (POSIX precedence
+     * LC_ALL > LC_MESSAGES > LANG, same as the Go version).
      *
      * @return string Language code ('en' or 'de')
      */
     private static function detectLanguage(): string
     {
-        // Try environment variables (same as Go version)
-        $envVars = ['LANG', 'LC_ALL', 'LC_MESSAGES'];
-
-        foreach ($envVars as $envVar) {
+        foreach (['LC_ALL', 'LC_MESSAGES', 'LANG'] as $envVar) {
             $lang = getenv($envVar);
+            if (($lang === false || $lang === '') && isset($_ENV[$envVar])) {
+                $lang = (string) $_ENV[$envVar];
+            }
             if ($lang !== false && $lang !== '') {
-                $lang = strtolower($lang);
-                if (strpos($lang, 'de') === 0) {
-                    return 'de';
-                }
-                if (strpos($lang, 'en') === 0) {
-                    return 'en';
-                }
+                return strpos(strtolower($lang), 'de') === 0 ? 'de' : 'en';
             }
         }
 
-        // Try $_ENV as fallback
-        foreach ($envVars as $envVar) {
-            if (isset($_ENV[$envVar])) {
-                $lang = strtolower($_ENV[$envVar]);
-                if (strpos($lang, 'de') === 0) {
-                    return 'de';
-                }
-                if (strpos($lang, 'en') === 0) {
-                    return 'en';
-                }
-            }
-        }
-
-        // Default to English
         return 'en';
-    }
-
-    /**
-     * Load translations from JSON files
-     *
-     * @return void
-     */
-    private static function loadTranslations(): void
-    {
-        if (self::$localesPath === null || !is_dir(self::$localesPath)) {
-            // If locales directory not found, use empty translations
-            self::$translations['en'] = [];
-            self::$translations['de'] = [];
-            return;
-        }
-
-        // Load English translations (fallback)
-        $enFile = self::$localesPath . '/en.json';
-        if (file_exists($enFile)) {
-            $data = file_get_contents($enFile);
-            if ($data !== false) {
-                $translations = json_decode($data, true);
-                if (is_array($translations)) {
-                    self::$translations['en'] = $translations;
-                }
-            }
-        }
-
-        // Load German translations
-        $deFile = self::$localesPath . '/de.json';
-        if (file_exists($deFile)) {
-            $data = file_get_contents($deFile);
-            if ($data !== false) {
-                $translations = json_decode($data, true);
-                if (is_array($translations)) {
-                    self::$translations['de'] = $translations;
-                }
-            }
-        }
-
-        // Try to load external translation files (override embedded ones)
-        self::loadExternalTranslations();
-    }
-
-    /**
-     * Load external translation files from locales directory
-     *
-     * @return void
-     */
-    private static function loadExternalTranslations(): void
-    {
-        if (self::$localesPath === null || !is_dir(self::$localesPath)) {
-            return;
-        }
-
-        $files = glob(self::$localesPath . '/*.json');
-        if ($files === false) {
-            return;
-        }
-
-        foreach ($files as $file) {
-            $lang = basename($file, '.json');
-            if (!isset(self::$translations[$lang])) {
-                self::$translations[$lang] = [];
-            }
-
-            $data = file_get_contents($file);
-            if ($data !== false) {
-                $translations = json_decode($data, true);
-                if (is_array($translations)) {
-                    // Merge with existing translations (external overrides embedded)
-                    self::$translations[$lang] = array_merge(
-                        self::$translations[$lang] ?? [],
-                        $translations
-                    );
-                }
-            }
-        }
     }
 
     /**
@@ -233,6 +145,20 @@ class I18n
     }
 
     /**
+     * Built-in text of a key (external translations are ignored). Used for
+     * the password marker, which must not be changed by external files.
+     *
+     * @param string|null $lang Language, null = current language
+     */
+    public static function builtinText(string $key, ?string $lang = null): string
+    {
+        self::initialize();
+        $lang = $lang ?? self::$currentLanguage;
+
+        return self::$builtin[$lang][$key] ?? self::$builtin['en'][$key] ?? $key;
+    }
+
+    /**
      * Translate a key to the current language
      *
      * @param string $key Translation key
@@ -241,26 +167,26 @@ class I18n
      */
     public static function translate(string $key, ...$args): string
     {
-        if (!self::$initialized) {
-            self::initialize();
+        self::initialize();
+        $translation = self::$translations[self::$currentLanguage][$key]
+            ?? self::$translations['en'][$key]
+            ?? $key;
+        if ($args === []) {
+            return $translation;
+        }
+        // Go-style %v becomes %s
+        $format = str_replace('%v', '%s', $translation);
+
+        try {
+            $result = @sprintf($format, ...$args);
+        } catch (\Throwable $e) {
+            $result = false; // PHP 8: ArgumentCountError / ValueError
+        }
+        if (! is_string($result)) {
+            return $translation . ': ' . implode(', ', array_map('strval', $args));
         }
 
-        // Get translation for current language
-        $translation = self::$translations[self::$currentLanguage][$key] ?? null;
-
-        // Fallback to English if not found
-        if ($translation === null) {
-            $translation = self::$translations['en'][$key] ?? $key;
-        }
-
-        // Format with arguments if provided
-        if (!empty($args)) {
-            // Handle Go-style %v formatting (convert to %s for PHP)
-            $translation = str_replace('%v', '%s', $translation);
-            return sprintf($translation, ...$args);
-        }
-
-        return $translation;
+        return $result;
     }
 
     /**

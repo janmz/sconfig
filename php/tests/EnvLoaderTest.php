@@ -146,6 +146,7 @@ class EnvLoaderTest extends TestCase
         $path = $this->envPath();
         file_put_contents($path, "FOO=bar\n");
         chmod($path, 0000);
+
         try {
             $this->expectException(\RuntimeException::class);
             $this->expectExceptionMessage('failed to read');
@@ -242,7 +243,7 @@ class EnvLoaderTest extends TestCase
 
     public function testEnvHelperReturnsValueAfterLoad(): void
     {
-        if (!function_exists('env')) {
+        if (! function_exists('env')) {
             $this->markTestSkipped('env() helper not loaded (e.g. autoload files)');
         }
         $path = $this->envPath();
@@ -319,6 +320,7 @@ class EnvLoaderTest extends TestCase
         file_put_contents($envFile, "APP_NAME=home
 ");
         EnvLoader::setHomeDirForTest($home);
+
         try {
             EnvLoader::load($envFile);
             self::assertSame('home', EnvLoader::get('APP_NAME'));

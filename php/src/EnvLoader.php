@@ -3,32 +3,34 @@
 namespace Sconfig;
 
 /**
- * Decription: Loads and manages environment variables from .env files with secure password handling
+ * Description: Loads and manages environment variables from .env files with
+ * secure password handling.
  *
- * Kernfunktion (wie bei der Go-Variante): Der Schlüssel ist absichtlich nicht zufällig pro
- * Aufruf, sondern auf derselben Maschine immer derselbe, damit .env-Daten lesbar bleiben.
- * Ziel ist ein nur-lokal reproduzierbares Geheimnis, nicht ein frisches Zufallsgeheimnis
- * bei jedem Start.
+ * Design goal (as in the Go implementation): the key is intentionally not
+ * random per call but always the same on the same machine, so that .env data
+ * stays readable. The aim is a secret that only this machine can reproduce,
+ * not a fresh random secret on every start.
  *
- * This class provides functionality to load environment variables from a .env file,
- * automatically encrypt passwords, and make them accessible via the env() helper function.
+ * This class loads environment variables from a .env file, automatically
+ * encrypts passwords and makes them accessible via the env() helper function.
  *
  * Password handling:
  * - Fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD` are treated as a pair
- * - If `<NAME>_PASSWORD` contains a plaintext password (not the marker), it will be encrypted
- * - The encrypted value is stored in `<NAME>_SECURE_PASSWORD`
+ * - If `<NAME>_PASSWORD` contains a plaintext password (not the marker), it is encrypted
+ * - The encrypted value (v2 format, see Crypto) is stored in `<NAME>_SECURE_PASSWORD`
  * - `<NAME>_PASSWORD` is replaced with a marker string
+ * - Legacy values (before v2) are decrypted and re-encrypted with v2 on load()
  * - In memory, passwords are automatically decrypted for transparent access
  *
  * @package Sconfig
  * @author Jan Neuhaus, VAYA Consulting
- * @version 1.2.0
+ * @version 3.0.0
  *
  * Changelog:
+ * 3.0.0 27.10.26 v2 key format shared with Go, migration of legacy values, format-preserving
+ *                atomic writes, updateEnv() writes only file and set() keys
  * 1.2.0 27.02.26 set(), updateEnv(): persist changes (e.g. theme); require load() first; may write to different path
  * 1.1.0 24.11.25 Initial build of the PHP variant of the sconfig library
- *
- *
  */
 class EnvLoader
 {
@@ -42,80 +44,9 @@ class EnvLoader
      * Optional override for the user's home directory (tests only).
      */
     private static ?string $homeDirOverride = null;
-    /**
-     * Get the password marker string for the current language
-     *
-     * @return string Marker string indicating password is encrypted
-     */
-    private static function getPasswordMarker(): string
-    {
-        I18n::initialize();
-        return I18n::t('config.password_message');
-    }
 
     /**
-     * Get password marker strings for both languages (for comparison)
-     *
-     * @return array<string> Array with 'en' and 'de' markers
-     */
-    private static function getPasswordMarkers(): array
-    {
-        I18n::initialize();
-        $currentLang = I18n::getCurrentLanguage();
-
-        // Get English marker
-        I18n::setLanguage('en');
-        $enMarker = I18n::t('config.password_message');
-
-        // Get German marker
-        I18n::setLanguage('de');
-        $deMarker = I18n::t('config.password_message');
-
-        // Restore original language
-        I18n::setLanguage($currentLang);
-
-        return ['en' => $enMarker, 'de' => $deMarker];
-    }
-
-    /**
-     * @param array<string, string> $markers
-     */
-    private static function isPasswordMarker(string $value, array $markers): bool
-    {
-        if ($value === '') {
-            return false;
-        }
-
-        return $value === self::getPasswordMarker()
-            || $value === $markers['en']
-            || $value === $markers['de'];
-    }
-
-    private static function validateEncryptedPasswordB64(string $text): void
-    {
-        if ($text === '') {
-            throw new \RuntimeException('empty encrypted password');
-        }
-
-        if (strlen($text) > 4096) {
-            throw new \RuntimeException('encrypted password too long');
-        }
-
-        $data = base64_decode($text, true);
-        if ($data === false) {
-            throw new \RuntimeException('invalid base64');
-        }
-
-        $ivLength = openssl_cipher_iv_length('aes-256-gcm');
-        $tagLength = 16;
-        $minLen = $ivLength + $tagLength;
-        if (strlen($data) < $minLen) {
-            throw new \RuntimeException('ciphertext too short');
-        }
-    }
-
-    /**
-     * @var array<string, string> Cache of loaded environment variables
+     * @var array<string, string> Values loaded from .env files or set via set()
      */
     private static array $cache = [];
 
@@ -130,21 +61,24 @@ class EnvLoader
     private static ?string $filePath = null;
 
     /**
-     * @var string|null Encryption key derived from hardware ID
+     * @var array<string, string> Origin of each cached key: resolved path of
+     *      the .env file it was loaded from, or "set" for set()
      */
-    private static ?string $encryptionKey = null;
+    private static array $origin = [];
 
     /**
-     * @var bool Whether encryption has been initialized
+     * @var bool Whether decrypted passwords are exported to / putenv()
      */
-    private static bool $encryptionInitialized = false;
+    private static bool $exportPasswords = true;
+
+    private const ORIGIN_SET = 'set';
 
     /**
      * Set the directory that contains the application entry script (or the
      * executable directory). Paths passed to load() / updateEnv() must resolve
-     * under this directory or under the current working directory. Call from
-     * application bootstrap if the default (directory of SCRIPT_FILENAME) is
-     * not appropriate.
+     * under this directory, under the current working directory or under the
+     * user's home directory. Call from application bootstrap if the default
+     * (directory of SCRIPT_FILENAME) is not appropriate.
      */
     public static function setExecutableRoot(string $directory): void
     {
@@ -165,6 +99,119 @@ class EnvLoader
     public static function setHomeDirForTest(?string $directory): void
     {
         self::$homeDirOverride = $directory;
+    }
+
+    /**
+     * @internal For tests only: replace the machine identity by a fixed number
+     * (legacy hardware ID and v2 source "override"); null = real machine.
+     */
+    public static function setHardwareIdForTest(?int $hardwareId): void
+    {
+        Crypto::setHardwareIdOverride($hardwareId);
+    }
+
+    /**
+     * Use a secret key file as additional source "keyfile" of the machine
+     * identity (protects against attackers who can read files of the machine,
+     * e.g. through a file disclosure bug). A missing file is created with 32
+     * random bytes and permissions 0600. Values encrypted with a key file can
+     * only be decrypted with the same file: losing it loses the passwords.
+     * Call before load(); null removes the key file. The path must lie under
+     * the script directory, the CWD or the home directory.
+     *
+     * @throws \RuntimeException If the file cannot be read or created
+     */
+    public static function setKeyFile(?string $path): void
+    {
+        I18n::initialize();
+        Crypto::setKeyFile($path === null ? null : self::resolveEnvFilePath($path));
+    }
+
+    /**
+     * Strict mode: refuse legacy values (encrypted before version 3.0.0, small
+     * key space) instead of decrypting and migrating them.
+     */
+    public static function setRejectLegacy(bool $reject): void
+    {
+        Crypto::setRejectLegacy($reject);
+    }
+
+    /**
+     * Set the handler for warnings (migrated legacy values, readable files,
+     * .env inside the web root). null restores the default (error_log()).
+     *
+     * @param callable(string): void|null $handler
+     */
+    public static function setWarningHandler(?callable $handler): void
+    {
+        Warnings::setHandler($handler);
+    }
+
+    /**
+     * Control whether decrypted passwords (<NAME>_PASSWORD) are exported to
+     * $_ENV and the process environment (putenv). Default true for
+     * compatibility. With false they are only available via env()/get() and
+     * are not inherited by child processes or shown by phpinfo().
+     */
+    public static function setExportPasswords(bool $export): void
+    {
+        self::$exportPasswords = $export;
+    }
+
+    private static function isPasswordKey(string $key): bool
+    {
+        return preg_match('/_PASSWORD$/i', $key) === 1 && preg_match('/_SECURE_PASSWORD$/i', $key) !== 1;
+    }
+
+    /**
+     * Write a value to $_ENV and the process environment, unless it is a
+     * password and exporting passwords is disabled.
+     */
+    private static function export(string $key, string $value): void
+    {
+        if (! self::$exportPasswords && self::isPasswordKey($key)) {
+            return;
+        }
+        $_ENV[$key] = $value;
+        putenv("{$key}={$value}");
+    }
+
+    /**
+     * Warn if the .env file lies inside the web document root.
+     */
+    private static function warnIfInDocumentRoot(string $filePath): void
+    {
+        $docRoot = $_SERVER['DOCUMENT_ROOT'] ?? '';
+        if (! is_string($docRoot) || $docRoot === '') {
+            return;
+        }
+        $docReal = realpath($docRoot);
+        if ($docReal === false) {
+            return;
+        }
+        $prefix = rtrim(str_replace('\\', '/', $docReal), '/') . '/';
+        if (strncmp(str_replace('\\', '/', $filePath), $prefix, strlen($prefix)) === 0) {
+            Warnings::emit(I18n::t('config.warn_docroot', $filePath));
+        }
+    }
+
+    /**
+     * Password marker of the current language (always the built-in text).
+     */
+    private static function getPasswordMarker(): string
+    {
+        return I18n::builtinText('config.password_message');
+    }
+
+    private static function isPasswordMarker(string $value): bool
+    {
+        if ($value === '') {
+            return false;
+        }
+
+        return $value === self::getPasswordMarker()
+            || $value === I18n::builtinText('config.password_message', 'en')
+            || $value === I18n::builtinText('config.password_message', 'de');
     }
 
     /**
@@ -229,16 +276,16 @@ class EnvLoader
      * Clean path and ensure it lies under the script/executable base, the
      * current working directory (getcwd()) or the user's home directory
      * (%USERPROFILE% on Windows, ~ on Unix, e.g. AppData\Roaming or ~/.config).
+     * Symbolic links are resolved (realpath).
      *
-     * @throws \RuntimeException If the path is invalid or escapes both bases
+     * @throws \RuntimeException If the path is invalid or escapes all bases
      */
     private static function resolveEnvFilePath(string $filePath): string
     {
-        I18n::initialize();
         $sep = DIRECTORY_SEPARATOR;
         $clean = str_replace(['\\', '/'], $sep, $filePath);
         // Resolve like Go filepath.Abs: relative paths are relative to CWD.
-        if (!self::isAbsolutePath($filePath)) {
+        if (! self::isAbsolutePath($filePath)) {
             $cwd = getcwd();
             if ($cwd === false) {
                 throw new \RuntimeException(I18n::t('config.path_invalid', $filePath));
@@ -251,37 +298,26 @@ class EnvLoader
         if ($rp !== false) {
             $final = $rp;
         } else {
-            $dir = dirname($abs);
-            $dirReal = realpath($dir);
+            $dirReal = realpath(dirname($abs));
             if ($dirReal === false) {
                 throw new \RuntimeException(I18n::t('config.path_invalid', $filePath));
             }
             $final = $dirReal . $sep . basename($abs);
         }
 
-        $bases = [];
-        $scriptBase = self::getExecutableDirectoryForEnvPaths();
-        $scriptReal = realpath($scriptBase);
-        if ($scriptReal !== false) {
-            $bases[] = $scriptReal;
-        }
-        $cwdReal = realpath(getcwd() ?: '.');
-        if ($cwdReal !== false) {
-            $bases[] = $cwdReal;
-        }
+        $bases = [self::getExecutableDirectoryForEnvPaths(), getcwd() ?: '.'];
         $home = self::getHomeDirectory();
         if ($home !== null) {
-            $homeReal = realpath($home);
-            if ($homeReal !== false) {
-                $bases[] = $homeReal;
-            }
+            $bases[] = $home;
         }
-        $bases = array_values(array_unique($bases));
-
         $finalNorm = str_replace('\\', '/', $final);
-        foreach ($bases as $baseReal) {
+        foreach ($bases as $base) {
+            $baseReal = realpath($base);
+            if ($baseReal === false) {
+                continue;
+            }
             $basePrefix = rtrim(str_replace('\\', '/', $baseReal), '/');
-            if ($finalNorm === $basePrefix || str_starts_with($finalNorm, $basePrefix . '/')) {
+            if ($finalNorm === $basePrefix || strncmp($finalNorm, $basePrefix . '/', strlen($basePrefix) + 1) === 0) {
                 return $final;
             }
         }
@@ -296,101 +332,57 @@ class EnvLoader
      * @param bool $override Whether to override existing environment variables
      * @param bool $cleanConfig If true, decrypts passwords before writing (use with care)
      * @return void
-     * @throws \RuntimeException If the file cannot be read or processed
+     * @throws \RuntimeException If the file cannot be read, decrypted or written
      */
     public static function load(string $filePath, bool $override = false, bool $cleanConfig = false): void
     {
-        // Initialize i18n first
         I18n::initialize();
-
-        self::initializeEncryption();
 
         $filePath = self::resolveEnvFilePath($filePath);
         self::$filePath = $filePath;
-        $changed = false;
+        self::warnIfInDocumentRoot($filePath);
 
-        if (!file_exists($filePath)) {
-            // Create empty file if it doesn't exist
-            file_put_contents($filePath, '');
+        if (! file_exists($filePath)) {
+            EnvFile::writeAtomic($filePath, '');
         }
-
-        if (!is_readable($filePath)) {
+        if (! is_readable($filePath)) {
             throw new \RuntimeException(I18n::t('config.read_failed', $filePath));
         }
 
-        $lines = file($filePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        if ($lines === false) {
-            throw new \RuntimeException(I18n::t('config.read_failed', $filePath));
-        }
+        [$parsed, $entries] = EnvFile::parse(EnvFile::readLines($filePath));
 
-        // Parse all lines into key-value pairs, preserving comments and structure
-        $parsed = [];
-        $lineData = [];
-
-        foreach ($lines as $lineNum => $line) {
-            $trimmed = trim($line);
-
-            // Preserve comments and empty lines
-            if (empty($trimmed) || strpos($trimmed, '#') === 0) {
-                $lineData[] = ['type' => 'comment', 'content' => $line];
-                continue;
-            }
-
-            // Parse KEY=VALUE format
-            if (strpos($line, '=') !== false) {
-                [$key, $value] = explode('=', $line, 2);
-                $key = trim($key);
-                $value = trim($value);
-
-                // Remove quotes if present
-                if (
-                    (substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
-                    (substr($value, 0, 1) === "'" && substr($value, -1) === "'")
-                ) {
-                    $value = substr($value, 1, -1);
-                }
-
-                $parsed[$key] = $value;
-                $lineData[] = ['type' => 'variable', 'key' => $key, 'value' => $value, 'original' => $line];
-            }
-        }
-
-        // Process password encryption/decryption
-        if (!$cleanConfig) {
+        if (! $cleanConfig) {
             $changed = self::processPasswords($parsed);
         } else {
-            // Decrypt passwords for clean config
             self::decryptPasswords($parsed);
             $changed = true;
         }
 
         // Update cache and environment
         foreach ($parsed as $key => $value) {
-            if ($override || !isset(self::$cache[$key])) {
+            if ($override || ! isset(self::$cache[$key])) {
                 self::$cache[$key] = $value;
-
-                if ($override || !isset($_ENV[$key])) {
-                    $_ENV[$key] = $value;
-                    putenv("{$key}={$value}");
+                self::$origin[$key] = $filePath;
+                if ($override || ! isset($_ENV[$key])) {
+                    self::export($key, $value);
                 }
             }
         }
 
-        // Write back to file if changed (before decrypting, so file keeps marker + encrypted)
+        // Write back before decrypting, so the file keeps marker + encrypted value
         if ($changed) {
-            self::writeEnvFile($filePath, $parsed, $lines);
+            EnvFile::writeAtomic($filePath, EnvFile::render($entries, $parsed));
         }
 
         // Decrypt passwords in memory for transparent access
-        if (!$cleanConfig) {
+        if (! $cleanConfig) {
             self::decryptPasswords($parsed);
-            // Update cache: always for decrypted password keys (replace marker), else respect override
+            // Always replace the marker of password keys, else respect $override
             foreach ($parsed as $key => $value) {
-                $isPasswordKey = preg_match('/_PASSWORD$/i', $key) && !preg_match('/_SECURE_PASSWORD$/i', $key);
-                if ($override || $isPasswordKey || !isset(self::$cache[$key])) {
+                if ($override || self::isPasswordKey($key) || ! isset(self::$cache[$key])) {
                     self::$cache[$key] = $value;
-                    $_ENV[$key] = $value;
-                    putenv("{$key}={$value}");
+                    self::$origin[$key] = self::$origin[$key] ?? $filePath;
+                    self::export($key, $value);
                 }
             }
         }
@@ -399,7 +391,9 @@ class EnvLoader
     }
 
     /**
-     * Process password pairs: encrypt plaintext passwords
+     * Encrypt plaintext passwords (v2), migrate legacy values to v2 and
+     * re-encrypt v2 values that use fewer sources than are available now.
+     * Warnings are issued for migrated and for not migratable legacy values.
      *
      * @param array<string, string> $parsed Parsed key-value pairs (modified in place)
      * @return bool True if any changes were made
@@ -407,45 +401,51 @@ class EnvLoader
     private static function processPasswords(array &$parsed): bool
     {
         $changed = false;
-        $markers = self::getPasswordMarkers();
-
+        $migrated = 0;
+        $failed = 0;
         foreach ($parsed as $key => $value) {
-            // Check if this is a Password field (not SecurePassword)
             if (
-                preg_match('/^(.+)_PASSWORD$/i', $key, $matches) &&
-                !preg_match('/^(.+)_SECURE_PASSWORD$/i', $key)
+                preg_match('/^(.+)_PASSWORD$/i', $key, $matches) !== 1 ||
+                preg_match('/^(.+)_SECURE_PASSWORD$/i', $key) === 1
             ) {
-                $prefix = $matches[1];
-                $securePasswordKey = $prefix . '_SECURE_PASSWORD';
-
-                $secureValue = $parsed[$securePasswordKey] ?? '';
-
-                if (self::isPasswordMarker($value, $markers)) {
-                    if ($secureValue === '') {
-                        throw new \RuntimeException(
-                            I18n::t('config.secure_password_missing', $prefix)
-                        );
-                    }
-                    continue;
-                }
-
-                // Check if password is plaintext (not the marker)
-                if ($value !== '') {
-                    // Encrypt the password
-                    $encrypted = self::encrypt($value);
-
-                    // Ensure SECURE_PASSWORD field exists (create if it doesn't)
-                    if (!isset($parsed[$securePasswordKey])) {
-                        $parsed[$securePasswordKey] = '';
-                    }
-
-                    // Set encrypted value in SECURE_PASSWORD
-                    $parsed[$securePasswordKey] = $encrypted;
-                    // Replace plaintext with marker
-                    $parsed[$key] = self::getPasswordMarker();
-                    $changed = true;
-                }
+                continue;
             }
+            $prefix = $matches[1];
+            $secureKey = $prefix . '_SECURE_PASSWORD';
+            $secureValue = $parsed[$secureKey] ?? '';
+
+            if (self::isPasswordMarker($value)) {
+                if ($secureValue === '') {
+                    throw new \RuntimeException(I18n::t('config.secure_password_missing', $prefix));
+                }
+                $legacy = ! Crypto::isV2($secureValue);
+                if ($legacy || Crypto::needsUpgrade($secureValue)) {
+                    $plain = self::decryptValue($prefix, $secureValue);
+
+                    try {
+                        $parsed[$secureKey] = Crypto::encrypt($plain, $prefix);
+                        $changed = true;
+                        $migrated += $legacy ? 1 : 0;
+                    } catch (\RuntimeException $e) {
+                        // keep the readable old value until a v2 identity exists
+                        $failed += $legacy ? 1 : 0;
+                    }
+                }
+
+                continue;
+            }
+
+            if ($value !== '') {
+                $parsed[$secureKey] = Crypto::encrypt($value, $prefix);
+                $parsed[$key] = self::getPasswordMarker();
+                $changed = true;
+            }
+        }
+        if ($migrated > 0) {
+            Warnings::emit(I18n::t('config.warn_migrated', $migrated));
+        }
+        if ($failed > 0) {
+            Warnings::emit(I18n::t('config.warn_migration_failed', $failed));
         }
 
         return $changed;
@@ -459,445 +459,47 @@ class EnvLoader
      */
     private static function decryptPasswords(array &$parsed): void
     {
-        $markers = self::getPasswordMarkers();
-
         foreach ($parsed as $key => $value) {
-            // Check if this is a SecurePassword field
-            if (preg_match('/^(.+)_SECURE_PASSWORD$/i', $key, $matches)) {
-                $prefix = $matches[1];
-                $passwordKey = $prefix . '_PASSWORD';
-                $passwordValue = $parsed[$passwordKey] ?? '';
-
-                if ($value === '') {
-                    if (self::isPasswordMarker($passwordValue, $markers)) {
-                        throw new \RuntimeException(
-                            I18n::t('config.secure_password_missing', $prefix)
-                        );
-                    }
-                    continue;
-                }
-
-                try {
-                    self::validateEncryptedPasswordB64($value);
-                } catch (\RuntimeException $e) {
-                    I18n::initialize();
-                    throw new \RuntimeException(
-                        I18n::t('config.encrypted_password_invalid', $prefix, $e->getMessage())
-                    );
-                }
-
-                try {
-                    $decrypted = self::decrypt($value);
-                    $parsed[$passwordKey] = $decrypted;
-                } catch (\Exception $e) {
-                    I18n::initialize();
-                    throw new \RuntimeException(
-                        I18n::t('config.decrypt_failed', $prefix) . ': ' . $e->getMessage()
-                    );
-                }
-            }
-        }
-    }
-
-    /**
-     * Write environment variables back to .env file
-     *
-     * @param string $filePath Path to the .env file
-     * @param array<string, string> $parsed Parsed key-value pairs
-     * @param array<string> $originalLines Original lines for preserving structure
-     * @return void
-     */
-    private static function writeEnvFile(string $filePath, array $parsed, array $originalLines): void
-    {
-        $output = [];
-        $written = [];
-
-        // First, write all original lines, updating values as needed
-        foreach ($originalLines as $line) {
-            $trimmed = trim($line);
-
-            if (empty($trimmed) || strpos($trimmed, '#') === 0) {
-                $output[] = $line;
+            if (preg_match('/^(.+)_SECURE_PASSWORD$/i', $key, $matches) !== 1) {
                 continue;
             }
-
-            if (strpos($line, '=') !== false) {
-                [$key] = explode('=', $line, 2);
-                $key = trim($key);
-
-                if (isset($parsed[$key])) {
-                    $value = $parsed[$key];
-                    // Preserve quotes if original had them
-                    $quoted = false;
-                    if (preg_match('/^["\']/', $line) && preg_match('/["\']$/', $line)) {
-                        $quoted = true;
-                        $quote = substr($line, strpos($line, '=') + 1, 1);
-                    }
-
-                    if ($quoted) {
-                        $output[] = $key . '=' . $quote . $value . $quote;
-                    } else {
-                        $output[] = $key . '=' . $value;
-                    }
-                    $written[$key] = true;
-                } else {
-                    $output[] = $line;
+            $prefix = $matches[1];
+            $passwordKey = $prefix . '_PASSWORD';
+            if ($value === '') {
+                if (self::isPasswordMarker($parsed[$passwordKey] ?? '')) {
+                    throw new \RuntimeException(I18n::t('config.secure_password_missing', $prefix));
                 }
-            }
-        }
 
-        // Add any new keys that weren't in the original file
-        foreach ($parsed as $key => $value) {
-            if (!isset($written[$key])) {
-                $output[] = $key . '=' . $value;
+                continue;
             }
+            $parsed[$passwordKey] = self::decryptValue($prefix, $value);
         }
-
-        file_put_contents($filePath, implode("\n", $output) . "\n");
     }
 
     /**
-     * Initialize encryption system with hardware-based key
+     * Decrypt one value and map errors to the user messages.
      *
-     * Intentional use of mt_rand (not random_bytes): The same hardware ID must
-     * always produce the same encryption key so that config files remain
-     * decryptable on the same machine. Security is provided by the
-     * hardware-derived input being unknowable to anyone without full access to
-     * the machine; the PRNG is used only for deterministic expansion of that
-     * secret seed into 32 key bytes. See securityreport.md and SECURITY.md.
-     *
-     * @return void
+     * @throws \RuntimeException
      */
-    private static function initializeEncryption(): void
+    private static function decryptValue(string $prefix, string $value): string
     {
-        if (self::$encryptionInitialized) {
-            return;
-        }
-
         try {
-            $hardwareId = self::getHardwareID();
-            // Deterministic expansion from hardware ID (same seed => same key, by design)
-            // Aligned with Go: math/rand.NewSource(hardwareID) for same-machine decrypt
-            mt_srand($hardwareId);
-            $key = '';
-            for ($i = 0; $i < 32; $i++) {
-                // Simulate Int63() >> 16 & 0xff using xor for deterministic byte sequence
-                $val = mt_rand() ^ mt_rand();
-                $key .= chr($val & 0xff);
-            }
-            self::$encryptionKey = $key;
-        } catch (\Exception $e) {
-            throw new \RuntimeException("Failed to initialize encryption: " . $e->getMessage());
+            return Crypto::decrypt($value, $prefix);
+        } catch (InvalidCiphertextException $e) {
+            throw new \RuntimeException(
+                I18n::t('config.encrypted_password_invalid', $prefix, $e->getMessage()),
+                0,
+                $e
+            );
+        } catch (\RuntimeException $e) {
+            throw new \RuntimeException(I18n::t('config.decrypt_failed', $prefix, $e->getMessage()), 0, $e);
         }
-
-        self::$encryptionInitialized = true;
     }
 
     /**
-     * Check if the system is running on a virtual machine
-     * Uses multiple detection methods for reliability
-     *
-     * @return bool True if running on a VM, false otherwise
-     */
-    private static function isVirtualMachine(): bool
-    {
-        if (PHP_OS_FAMILY === 'Windows') {
-            // Windows VM detection using WMI
-            $output = @shell_exec('wmic computersystem get Manufacturer,Model /value 2>nul');
-            if ($output) {
-                $manufacturer = '';
-                $model = '';
-                $lines = explode("\n", $output);
-                foreach ($lines as $line) {
-                    if (strpos($line, 'Manufacturer=') === 0) {
-                        $manufacturer = strtolower(trim(substr($line, 13)));
-                    } elseif (strpos($line, 'Model=') === 0) {
-                        $model = strtolower(trim(substr($line, 6)));
-                    }
-                }
-
-                $vmIndicators = [
-                    'vmware', 'virtualbox', 'microsoft corporation', 'xen',
-                    'parallels', 'qemu', 'kvm', 'innotek', 'bochs'
-                ];
-
-                foreach ($vmIndicators as $indicator) {
-                    if (
-                        strpos($manufacturer, $indicator) !== false ||
-                        strpos($model, $indicator) !== false
-                    ) {
-                        return true;
-                    }
-                }
-
-                // Check for Hyper-V (Virtual Machine in Model)
-                if (strpos($model, 'virtual') !== false) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        if (PHP_OS_FAMILY !== 'Linux') {
-            return false;
-        }
-
-        // Method 1: systemd-detect-virt (most reliable)
-        $output = @shell_exec('systemd-detect-virt 2>/dev/null');
-        if ($output) {
-            $virt = trim($output);
-            // Returns "none" on bare metal, or VM type (kvm, vmware, qemu, etc.)
-            if ($virt !== 'none' && $virt !== '') {
-                return true;
-            }
-        }
-
-        // Method 2: Check DMI vendor/product
-        $checks = [
-            '/sys/class/dmi/id/sys_vendor',
-            '/sys/class/dmi/id/product_name',
-            '/sys/class/dmi/id/chassis_vendor',
-        ];
-
-        $vmIndicators = [
-            'qemu', 'kvm', 'vmware', 'virtualbox', 'xen',
-            'parallels', 'microsoft', 'bochs', 'bhyve'
-        ];
-
-        foreach ($checks as $file) {
-            $content = @file_get_contents($file);
-            if ($content) {
-                $content = strtolower(trim($content));
-                foreach ($vmIndicators as $indicator) {
-                    if (strpos($content, $indicator) !== false) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Get hardware ID for encryption key generation
-     * On virtual machines, prioritizes stable identifiers like machine-id and product_uuid
-     *
-     * @return int 64-bit hardware identifier
-     * @throws \RuntimeException If hardware ID cannot be determined
-     */
-    private static function getHardwareID(): int
-    {
-        $identifiers = [];
-        $isVM = self::isVirtualMachine();
-
-        // Try to get MAC address
-        if (PHP_OS_FAMILY === 'Windows') {
-            if ($isVM) {
-                // For Windows VMs: prioritize stable identifiers
-                // 1. MachineGuid from Registry (very stable on Windows)
-                $output = @shell_exec('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid 2>nul');
-                if ($output) {
-                    // Parse: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography
-                    //     MachineGuid    REG_SZ    {GUID}
-                    $lines = explode("\n", $output);
-                    foreach ($lines as $line) {
-                        if (preg_match('/MachineGuid\s+REG_SZ\s+(.+)/i', $line, $matches)) {
-                            $machineGuid = trim($matches[1]);
-                            if (!empty($machineGuid)) {
-                                $identifiers[] = $machineGuid;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // 2. SMBIOS UUID (usually stable on VMs)
-                $output = @shell_exec('wmic csproduct get UUID /value 2>nul');
-                if ($output) {
-                    $lines = explode("\n", trim($output));
-                    foreach ($lines as $line) {
-                        if (strpos($line, 'UUID=') === 0) {
-                            $uuid = trim(substr($line, 5));
-                            if (!empty($uuid)) {
-                                $identifiers[] = $uuid;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Common identifiers (for both VM and physical)
-            $output = @shell_exec('getmac /fo csv /nh 2>nul');
-            if ($output) {
-                $lines = explode("\n", trim($output));
-                if (!empty($lines)) {
-                    $parts = str_getcsv($lines[0]);
-                    if (!empty($parts[0])) {
-                        $identifiers[] = $parts[0];
-                    }
-                }
-            }
-
-            // Try Windows-specific hardware IDs
-            // On VMs, skip CPU ProcessorId as it's often unreliable
-            $commands = [
-                'wmic baseboard get SerialNumber /value',
-                'wmic baseboard get Product /value',
-                'wmic diskdrive get SerialNumber /value',
-            ];
-
-            if (!$isVM) {
-                // Only use CPU ProcessorId on physical machines
-                $commands[] = 'wmic cpu get ProcessorId /value';
-            }
-
-            foreach ($commands as $cmd) {
-                $output = @shell_exec($cmd . ' 2>nul');
-                if ($output) {
-                    $lines = explode("\n", trim($output));
-                    foreach ($lines as $line) {
-                        if (strpos($line, '=') !== false) {
-                            [, $value] = explode('=', $line, 2);
-                            $value = trim($value);
-                            if (!empty($value)) {
-                                $identifiers[] = $value;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Linux/Unix
-            if ($isVM) {
-                // For VMs: prioritize stable identifiers
-                // 1. machine-id (very stable on VMs)
-                $machineId = @file_get_contents('/etc/machine-id');
-                if ($machineId && trim($machineId) !== '') {
-                    $identifiers[] = trim($machineId);
-                }
-
-                // 2. product_uuid (usually stable on VMs)
-                $productUuid = @file_get_contents('/sys/class/dmi/id/product_uuid');
-                if ($productUuid && trim($productUuid) !== '') {
-                    $identifiers[] = trim($productUuid);
-                }
-            }
-
-            // Common identifiers (for both VM and physical)
-            $commands = [
-                "cat /sys/class/net/*/address 2>/dev/null | head -1",
-                "cat /sys/class/dmi/id/board_serial 2>/dev/null",
-            ];
-
-            // Only add CPU serial if not on VM (often unreliable on VMs)
-            if (!$isVM) {
-                $commands[] = "cat /proc/cpuinfo | grep 'Serial' | head -1";
-            }
-
-            foreach ($commands as $cmd) {
-                $output = @shell_exec($cmd);
-                if ($output) {
-                    $value = trim($output);
-                    if (!empty($value)) {
-                        $identifiers[] = $value;
-                    }
-                }
-            }
-        }
-
-        if (empty($identifiers)) {
-            // Fallback: use hostname and PHP version
-            $identifiers[] = gethostname();
-            $identifiers[] = PHP_VERSION;
-        }
-
-        // Combine identifiers and create hash
-        $combined = implode('|', $identifiers);
-        $hash = hash('sha256', $combined, true);
-
-        // Return first 64 bits as integer (similar to Go implementation)
-        $result = 0;
-        for ($i = 0; $i < 8; $i++) {
-            $result = ($result << 8) | ord($hash[$i]);
-        }
-
-        return (int)$result;
-    }
-
-    /**
-     * Encrypt text using AES-256-GCM
-     *
-     * @param string $text Plaintext to encrypt
-     * @return string Base64-encoded encrypted text
-     */
-    private static function encrypt(string $text): string
-    {
-        I18n::initialize();
-
-        if (self::$encryptionKey === null) {
-            throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
-        }
-
-        $method = 'aes-256-gcm';
-        $ivLength = openssl_cipher_iv_length($method);
-        $iv = openssl_random_pseudo_bytes($ivLength);
-
-        $tag = '';
-        $encrypted = openssl_encrypt($text, $method, self::$encryptionKey, OPENSSL_RAW_DATA, $iv, $tag);
-
-        if ($encrypted === false) {
-            throw new \RuntimeException(I18n::t('config.failed_checking', 'encryption'));
-        }
-
-        // Combine IV, tag, and ciphertext
-        $combined = $iv . $tag . $encrypted;
-        return base64_encode($combined);
-    }
-
-    /**
-     * Decrypt text using AES-256-GCM
-     *
-     * @param string $encryptedText Base64-encoded encrypted text
-     * @return string Decrypted plaintext
-     * @throws \RuntimeException If decryption fails
-     */
-    private static function decrypt(string $encryptedText): string
-    {
-        I18n::initialize();
-
-        if (self::$encryptionKey === null) {
-            throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
-        }
-
-        self::validateEncryptedPasswordB64($encryptedText);
-
-        $data = base64_decode($encryptedText, true);
-        if ($data === false) {
-            throw new \RuntimeException(I18n::t('config.failed_parsing', 'base64 data'));
-        }
-
-        $method = 'aes-256-gcm';
-        $ivLength = openssl_cipher_iv_length($method);
-        $tagLength = 16; // GCM tag is always 16 bytes
-
-        $iv = substr($data, 0, $ivLength);
-        $tag = substr($data, $ivLength, $tagLength);
-        $ciphertext = substr($data, $ivLength + $tagLength);
-
-        $decrypted = openssl_decrypt($ciphertext, $method, self::$encryptionKey, OPENSSL_RAW_DATA, $iv, $tag);
-
-        if ($decrypted === false) {
-            throw new \RuntimeException(I18n::t('config.decrypt_failed', '', 'decryption'));
-        }
-
-        return $decrypted;
-    }
-
-    /**
-     * Get an environment variable value
+     * Get an environment variable value: loaded/set values first, then $_ENV,
+     * then getenv(). Values from the process environment are not cached, so
+     * updateEnv() never writes them into a file.
      *
      * @param string $key The environment variable key
      * @param mixed $default Default value if key is not found
@@ -905,21 +507,14 @@ class EnvLoader
      */
     public static function get(string $key, $default = null)
     {
-        // Check cache first
         if (isset(self::$cache[$key])) {
             return self::$cache[$key];
         }
-
-        // Check $_ENV
         if (isset($_ENV[$key])) {
-            self::$cache[$key] = $_ENV[$key];
             return $_ENV[$key];
         }
-
-        // Check getenv()
         $value = getenv($key);
         if ($value !== false) {
-            self::$cache[$key] = $value;
             return $value;
         }
 
@@ -944,21 +539,29 @@ class EnvLoader
      * Use together with updateEnv() to persist changes to the .env file.
      * Example: after user changes theme to "light", call set('THEME', 'light') then updateEnv('.env').
      *
-     * @param string $key The environment variable key
-     * @param string $value The value to set
+     * @param string $key The environment variable key (letters, digits, "_", ".")
+     * @param string $value The value to set (no control characters except tab)
      * @return void
+     * @throws \InvalidArgumentException For invalid names or values (e.g. line
+     *         breaks, which would inject further variables into the file)
      */
     public static function set(string $key, string $value): void
     {
+        I18n::initialize();
+        EnvFile::validateKey($key);
+        EnvFile::validateValue($key, $value);
         self::$cache[$key] = $value;
-        $_ENV[$key] = $value;
-        putenv("{$key}={$value}");
+        self::$origin[$key] = self::ORIGIN_SET;
+        self::export($key, $value);
     }
 
     /**
-     * Write current cache to .env file. Requires load() to have been called first.
-     * Secure password fields are encrypted in the file unless $cleanConfig is true.
-     * The path may differ from the one used in load() (e.g. backup.env).
+     * Write the loaded and set() values to a .env file. Requires load() first.
+     * Secure password fields are encrypted in the file unless $cleanConfig is
+     * true. The path may differ from the one used in load() (e.g. backup.env).
+     * Written are the set() values plus the values loaded from this file, or,
+     * for a file that was not loaded (backup), from the last loaded file.
+     * Values that only come from the process environment are never written.
      *
      * @param string $filePath Path to the .env file to write
      * @param bool $cleanConfig If true, passwords are written in plaintext (use with care)
@@ -968,46 +571,28 @@ class EnvLoader
     public static function updateEnv(string $filePath, bool $cleanConfig = false): void
     {
         I18n::initialize();
-        if (!self::$loaded || !self::$encryptionInitialized) {
+        if (! self::$loaded) {
             throw new \RuntimeException(I18n::t('config.load_first'));
         }
         $filePath = self::resolveEnvFilePath($filePath);
-        $lines = [];
         $parsed = [];
+        $entries = [];
         if (file_exists($filePath) && is_readable($filePath)) {
-            $lines = file($filePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            if ($lines === false) {
-                $lines = [];
-            } else {
-                foreach ($lines as $line) {
-                    $trimmed = trim($line);
-                    if (empty($trimmed) || strpos($trimmed, '#') === 0) {
-                        continue;
-                    }
-                    if (strpos($line, '=') !== false) {
-                        [$key, $value] = explode('=', $line, 2);
-                        $key = trim($key);
-                        $value = trim($value);
-                        if (
-                            (substr($value, 0, 1) === '"' && substr($value, -1) === '"') ||
-                            (substr($value, 0, 1) === "'" && substr($value, -1) === "'")
-                        ) {
-                            $value = substr($value, 1, -1);
-                        }
-                        $parsed[$key] = $value;
-                    }
-                }
-            }
+            [$parsed, $entries] = EnvFile::parse(EnvFile::readLines($filePath));
         }
+        $source = in_array($filePath, self::$origin, true) ? $filePath : self::$filePath;
         foreach (self::$cache as $key => $value) {
-            $parsed[$key] = $value;
+            $origin = self::$origin[$key] ?? null;
+            if ($origin === self::ORIGIN_SET || $origin === $source) {
+                $parsed[$key] = $value;
+            }
         }
         if ($cleanConfig) {
             self::decryptPasswords($parsed);
         } else {
             self::processPasswords($parsed);
         }
-        self::writeEnvFile($filePath, $parsed, $lines);
+        EnvFile::writeAtomic($filePath, EnvFile::render($entries, $parsed));
     }
 
     /**
@@ -1018,6 +603,7 @@ class EnvLoader
     public static function clear(): void
     {
         self::$cache = [];
+        self::$origin = [];
         self::$loaded = false;
         self::$filePath = null;
     }

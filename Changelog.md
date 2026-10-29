@@ -2,6 +2,148 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.0.0.65] - 2026-10-29
+
+Release der Änderungen aus 2.1.0.63 und 2.1.0.64 als neue Hauptversion
+(2.1.0 wurde nie veröffentlicht).
+
+### Changed
+
+- **Go:** Modulpfad `github.com/janmz/sconfig/v3`. Programme müssen den
+  Importpfad ausdrücklich auf `/v3` umstellen; `/v2` bleibt bei Version 2.
+- **PHP:** Composer-Version 3.0.0 (Tag `v3.0.0`), Einbindung mit
+  `"janmz/sconfig": "^3.0"`.
+- **Doku:** Abschnitt „Upgrading from v2 to v3“ / „Upgrade von v2 auf v3“ in
+  README.md, README.de.md und php/README.md; `go get`, Import und
+  `-ldflags`-Beispiel auf `/v3` (das nicht existierende `GitCommit` entfernt).
+  Versionsangaben „2.1.0“ in Doku, Code-Kommentaren und Meldungen auf „3.0.0“.
+
+---
+
+## [2.1.0.64] - 2026-10-27
+
+Umsetzung des Sicherheitsaudits vom 2026-10-27 (`securityreport.md`, 15 von
+16 Funden; SA-7 abgelehnt wie CR-20).
+
+### Security
+
+- **PHP:** `set()` lehnt ungültige Variablennamen und Werte mit
+  Steuerzeichen ab; `EnvFile::render()` verweigert Zeilenumbrüche – keine
+  Zeileninjektion in `.env` mehr (SA-1).
+- **Go & PHP:** v2-Werte sind per AAD an den Feldnamen gebunden
+  (`sconfig:<feld>`, Go/PHP-kompatibel); Quellenliste muss kanonisch sein
+  (sortiert, eindeutig, max. 8 Namen/256 Zeichen) (SA-8, SA-10).
+- **Go & PHP:** optionale geheime Schlüsseldatei als zusätzliche Quelle
+  `keyfile` (`SetKeyFile` / `EnvLoader::setKeyFile`); vorhandene Werte werden
+  beim Laden auf alle Quellen hochgestuft (SA-4).
+- **Go & PHP:** strikter Modus gegen Alt-Werte (`SetRejectLegacy` /
+  `setRejectLegacy`); Warnungen nach Migration (Passwörter wechseln), bei
+  fehlgeschlagener Migration, bei für andere lesbaren Dateien und (PHP) bei
+  `.env` im Webroot; Warnungskanal `SetWarningHandler` /
+  `setWarningHandler` (SA-2, SA-6, SA-9, SA-16).
+- **Go & PHP:** externe Programme mit absoluten Pfaden, ohne `cmd.exe`,
+  fester Suchpfad bzw. minimale Umgebung, `NoDefaultCurrentDirectoryInExePath`;
+  System32 per `GetSystemDirectoryW` bzw. validiertem `SystemRoot`; Go
+  `WaitDelay`, Ausgabelimit 1 MiB; PHP räumt Temp-Dateien nach Timeout auf
+  (SA-3, SA-11, SA-12). Die Alt-IDs bleiben identisch (geprüft).
+- **Go:** atomares Schreiben behält Symlinks, Unix-Owner und unter Windows
+  ACL/Attribute (`ReplaceFileW`); neue Dateien unter Windows mit DACL nur für
+  Eigentümer, SYSTEM, Administratoren. **PHP:** Owner/Gruppe werden (falls
+  erlaubt) übernommen (SA-6).
+- **PHP:** `EnvLoader::setExportPasswords(false)` verhindert den Export
+  entschlüsselter Passwörter nach `$_ENV`/`putenv()`; Befehle laufen mit
+  minimaler Umgebung (SA-5). `updateEnv()` schreibt nur Schlüssel der
+  Zieldatei bzw. der zuletzt geladenen Datei und aus `set()` (SA-14).
+- **Go & PHP:** Größenlimits beim Lesen (Config 16 MiB, `.env` und Locales
+  1 MiB) (SA-13).
+- **Doku:** Optionen, Bedrohungsmodell, Container/LFI, Umgang mit
+  Fehlermeldungen in Webanwendungen (SA-15).
+
+---
+
+## [2.1.0.63] - 2026-10-27
+
+Umsetzung des Code-Reviews vom 2026-10-26 (`codereview.md`, 32 von 33
+Funden; CR-20 abgelehnt).
+
+### Security
+
+- **Go & PHP: neues Schlüsselformat v2** (CR-1/2/3/14/15/16). Neue Werte:
+  `v2:<Quellen>:<base64(nonce|ct|tag)>`, Schlüssel per HKDF-SHA256 aus
+  stabilen Rechnerquellen (Windows: `MachineGuid` + SMBIOS-UUID per CIM,
+  Linux: `/etc/machine-id`, macOS: `IOPlatformUUID`, FreeBSD:
+  `kern.hostuuid`). Kein `wmic`, keine MAC-Adresse, kein 31/32-Bit-Seed
+  mehr. Go und PHP erzeugen identische Schlüssel (gemeinsame Testvektoren).
+- **Migration:** Alt-Werte (v1) werden weiter gelesen (Ableitung eingefroren,
+  Known-Answer-Tests) und beim Laden automatisch als v2 neu geschrieben.
+- **Fehlende Quellen** werden mit Namen gemeldet (`config.v2_source_missing`,
+  CR-4); externe Befehle laufen mit Timeout, ein Timeout ist ein Fehler
+  (CR-21).
+- **Atomares Schreiben** über Temp-Datei + Rename, neue Dateien mit 0600
+  (Go & PHP, CR-7/22/23).
+- **Pfadprüfung** löst Symlinks und Windows-Junctions auf (CR-25).
+- **i18n:** keine automatische Übernahme eines fremden `locales/`-Ordners
+  mehr (Go: `SetLocalesDir()`, PHP: `I18n::initialize($pfad)`), kein Panic,
+  Passwort-Marker immer aus den eingebauten Texten (CR-12).
+- **PHP:** `updateEnv()` schreibt keine Werte der Prozess-Umgebung mehr
+  (CR-6); Schreibfehler werfen eine Exception (CR-7).
+- `securityreport.md` und `codereview.md` in `.gitignore`;
+  `securityreport.md` aus dem Git-Index entfernt (war eingecheckt).
+
+### Fixed
+
+- **Go:** Passwörter in Pointer-Substructs, `[]*T`, Arrays und Maps werden
+  verschlüsselt (CR-5); nur das oberste `Version`-Feld wird synchronisiert
+  (CR-10); `config_init` beendet den Prozess nicht mehr per `log.Fatalf`,
+  Fehler werden zurückgegeben (CR-11); `default`-Tags gelten auch für aus der
+  Datei geladene Slice-/Array-/Map-Elemente und Pointer-Ziele, neue Typen
+  `uint*`, `int8–32`, `float*`, `time.Duration` (CR-18); Indexgrenze im
+  `ipconfig`-Parser (CR-19); Fehler von `rand.Read` geprüft (CR-33);
+  `UpdateConfig` setzt ein `uint`-`Version` nicht mehr auf 0.
+- **Go:** `LoadConfig`/`UpdateConfig` sind threadsicher (Mutex, CR-24);
+  Sprachwahl LC_ALL > LC_MESSAGES > LANG (Go & PHP).
+- **PHP:** `.env` behält beim Zurückschreiben Quotes, Leerzeilen,
+  `export`-Präfixe und Zeilen ohne `=`; Werte mit Leerzeichen (Marker)
+  werden gequotet (CR-8); falscher Schlüssel führt zu `RuntimeException`
+  statt `ArgumentCountError` (CR-9).
+- **PHP:** eingebaute Übersetzungen werden in `php/locales/` mitgeliefert
+  (bisher fehlten sie im Composer-Paket).
+
+### Changed
+
+- **Go:** Code aufgeteilt in `hwid_v1.go` (eingefroren), `hwid_v2.go`,
+  `keys.go`, `walk.go`, `fileio.go`, `command.go`; toter Code entfernt,
+  Bubble-Sorts durch `slices` ersetzt, ein gemeinsamer Struct-Walker,
+  Base64 wird nur einmal geprüft (CR-13/26/28/29/30/32); Kommentare auf
+  Englisch (CR-31).
+- **PHP:** `EnvLoader` aufgeteilt in `Crypto`, `MachineIdentity`,
+  `LegacyHardwareId` (eingefroren), `EnvFile`, `Command`; Testhook
+  `EnvLoader::setHardwareIdForTest()`.
+- **Doku:** README.md/README.de.md/php/README.md beschreiben v2 und v1
+  vollständig; CLAUDE.md-Übersicht aktualisiert.
+
+---
+
+## [2.0.8.62] - 2026-10-26
+
+### Documentation
+
+- **README.md, README.de.md, php/README.md:** Neuer Abschnitt „How the
+  hardware ID is created“ / „So entsteht die Hardware-ID“. Beschreibt für Go
+  und PHP Schritt für Schritt VM-Erkennung, MAC-Auswahl, alle
+  Identifikatoren je Betriebssystem, Fallbacks, Sortierung, Hash,
+  Byte-Reihenfolge und Schlüsselerzeugung.
+- Klargestellt: Die „Hardware-ID“ enthält auch Nicht-Hardware-Daten
+  (`MachineGuid`, `/etc/machine-id`, Netzwerkzustand, PHP-Fallback
+  Hostname + PHP-Version); ohne `wmic` (aktuelles Windows 11) bzw. unter
+  macOS (Go) besteht sie nur aus der MAC-Adresse; Go und PHP erzeugen
+  unterschiedliche IDs/Schlüssel und sind nicht kompatibel; der effektive
+  Schlüsselraum beträgt nur ca. 2^31 (Go) bzw. 2^32 (PHP).
+- **CLAUDE.md:** falsche Aussage „Go und PHP liefern dieselbe ID“ korrigiert.
+- Code-Review durchgeführt (`codereview.md`, 33 Funde).
+
+---
+
 ## [2.0.7.60] - 2026-10-10
 
 ### Fixed

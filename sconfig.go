@@ -1,19 +1,19 @@
 package sconfig
 
 /*
- * Description: This package contains a function for managing config files with secure passwords.
+ * Description: This package contains functions for managing config files with
+ * secure passwords.
  *
- * Kern der Bibliothek (Designziel):
- * Der Verschlüsselungsschlüssel ist absichtlich nicht zufällig und nicht pro Aufruf neu.
- * Auf demselben Rechner muss immer derselbe Schlüssel erzeugt werden, damit gespeicherte
- * Config- bzw. .env-Daten weiter lesbar sind. Ziel ist kein „frisches“ Zufallsgeheimnis
- * pro Start, sondern ein geheimnisbehafteter, aber deterministisch aus
- * hardware-/systemgebundenen Daten abgeleiteter Schlüssel, den nur diese Maschine
- * reproduzieren kann (ohne Zugriff auf die Hardware bzw. das System nicht erratbar).
+ * Design goal: the encryption key is intentionally neither random nor new per
+ * call. The same machine must always derive the same key so that stored
+ * config or .env data stays readable. The key is derived deterministically
+ * from machine-bound data (see hwid_v2.go) that only this machine can
+ * reproduce; it cannot be guessed without access to the machine.
  *
- * Version: 2.0.8.61 (in version.go zu ändern)
+ * Version: see version.go
  *
  * ChangeLog:
+ *  27.10.26	3.0.0	Feature: v2 key format (HKDF, stable machine sources, source list per value), automatic migration of v1 values, pointer/map/array support, atomic writes
  *  10.10.26	2.0.8	Feature: Allow config files in %USERPROFILE% or ~
  *  24.06.26	2.0.5	Fix: second try to handle empty composer.lock
  *  24.06.26	2.0.4	Fix: use 1.25.x in workflow. an composer audit --locked
@@ -42,33 +42,34 @@ package sconfig
  * Author: Jan Neuhaus, VAYA Consulting, https://vaya-consultig.de/development/ https://github.com/janmz
  *
  * Functions:
- * - LoadConfig(): Loads the configuration from a file and processes it, it may rewrite it to encode passwords.
- * - UpdateConfig(): Writes the config struct to a file; requires LoadConfig to have been called first. Secure fields are encrypted in the file unless cleanConfig is true. Path may differ from the one used in LoadConfig (e.g. backup).
+ * - LoadConfig(): Loads the configuration from a file and processes it; it may
+ *   rewrite the file to encrypt passwords or to migrate legacy values.
+ * - UpdateConfig(): Writes the config struct to a file; requires LoadConfig to
+ *   have been called first. Secure fields are encrypted in the file unless
+ *   cleanConfig is true. The path may differ from the one used in LoadConfig.
+ * - DebugHardwareID(): Prints the legacy hardware ID and the v2 machine
+ *   identity with all inputs to stderr.
+ * - SetLocalesDir(): Loads additional translations from a directory.
  *
- * Dependencies:
- * - i18n.go and locales/*.json: For internationalization of error messages
+ * Files:
+ * - hwid_v2.go: machine identity and key derivation for new values (v2)
+ * - hwid_v1.go, key_rand_go123.go: frozen legacy hardware ID (v1, read only)
+ * - keys.go: key cache, encryption and decryption
+ * - walk.go: struct traversal, default values, password pairs
+ * - fileio.go: atomic file writes
+ * - i18n.go and locales/*.json: translated error messages
  */
 
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"crypto/aes"    // AES Encryption
-	"crypto/cipher" // Cipher for GCM
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64" // Base64 Encoding
 )
 
 // PASSWORD_IS_SECURE is the marker written to plaintext password fields after
@@ -84,19 +85,17 @@ var PASSWORD_IS_SECURE_en string
 // when deciding whether a password field already contains an encrypted value.
 var PASSWORD_IS_SECURE_de string
 
-var encryptionKey []byte
-var initialized = false
+// apiMu serializes LoadConfig, UpdateConfig, DebugHardwareID and ResetForTest,
+// which share the package state (keys, markers, debug flags).
+var apiMu sync.Mutex
 
-// Debug tracking: when debugOutput is true, hardware ID and identifiers are logged to sconfig.debug.txt
+// Debug tracking: when debugOutput is true, the legacy hardware ID and its
+// identifiers are logged to sconfig.debug.txt.
 var debugMode bool
 var lastDebugHardwareID uint64
 var lastDebugIdentifiers string
 
 const debugLogFilename = "sconfig.debug.txt"
-
-// maxEncryptedPasswordB64Len limits base64 ciphertext size to avoid excessive
-// memory use from malformed or hostile config values.
-const maxEncryptedPasswordB64Len = 4096
 
 // executableRootForTest, if set, replaces the directory of os.Executable() when
 // resolving config paths (tests only).
@@ -140,8 +139,79 @@ func getExecutableDirForConfigPaths() (string, error) {
 	return getExecutableDir()
 }
 
+// maxLinkDepth limits nested link resolution (protects against link loops).
+const maxLinkDepth = 40
+
+// resolveLinks resolves all symbolic links of an existing path. On Windows,
+// filepath.EvalSymlinks does not follow junctions (mount points) since Go
+// 1.23, so they are resolved component by component with os.Readlink.
+func resolveLinks(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || runtime.GOOS != "windows" {
+		return resolved, err
+	}
+	return resolveJunctions(resolved, 0)
+}
+
+// resolveJunctions follows Windows junctions and remaining reparse points in
+// every component of an existing absolute path.
+func resolveJunctions(path string, depth int) (string, error) {
+	if depth > maxLinkDepth {
+		return "", fmt.Errorf("too many levels of links: %s", path)
+	}
+	volume := filepath.VolumeName(path)
+	parts := strings.Split(strings.Trim(path[len(volume):], `\/`), string(filepath.Separator))
+	current := volume + string(filepath.Separator)
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		next := filepath.Join(current, part)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			if target, err := os.Readlink(next); err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(current, target)
+				}
+				return resolveJunctions(filepath.Join(append([]string{target}, parts[i+1:]...)...), depth+1)
+			}
+		}
+		current = next
+	}
+	return current, nil
+}
+
+// resolveSymlinks resolves symbolic links (and junctions) of the longest
+// existing prefix of an absolute path and appends the not yet existing rest.
+func resolveSymlinks(abs string) string {
+	current := filepath.Clean(abs)
+	rest := ""
+	for {
+		if resolved, err := resolveLinks(current); err == nil {
+			if rest == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(abs)
+		}
+		if rest == "" {
+			rest = filepath.Base(current)
+		} else {
+			rest = filepath.Join(filepath.Base(current), rest)
+		}
+		current = parent
+	}
+}
+
 // pathUnderBase reports whether target is the same path as base or a path
-// inside base (no path traversal above base).
+// inside base (no path traversal above base). Symbolic links are resolved on
+// both sides, so a link inside base that points outside is rejected.
 func pathUnderBase(base, target string) (bool, error) {
 	baseAbs, err := filepath.Abs(base)
 	if err != nil {
@@ -151,7 +221,7 @@ func pathUnderBase(base, target string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rel, err := filepath.Rel(baseAbs, targetAbs)
+	rel, err := filepath.Rel(resolveSymlinks(baseAbs), resolveSymlinks(targetAbs))
 	if err != nil {
 		// e.g. different volume letters on Windows — not under base
 		return false, nil
@@ -162,15 +232,14 @@ func pathUnderBase(base, target string) (bool, error) {
 	return true, nil
 }
 
-// resolveConfigPath cleans the path, resolves it to an absolute path, and ensures
-// it lies under the executable directory (or executableRootForTest in tests),
-// under the process current working directory, or under the user's home
-// directory (%USERPROFILE% on Windows, ~ on Unix, e.g. for AppData\Roaming or
-// ~/.config). Relative paths are resolved with
-// filepath.Abs (i.e. relative to the CWD), matching usual CLI expectations.
+// resolveConfigPath cleans the path, resolves it to an absolute path, and
+// ensures it lies under the executable directory (or executableRootForTest in
+// tests), under the process current working directory, or under the user's
+// home directory (%USERPROFILE% on Windows, ~ on Unix, e.g. for
+// AppData\Roaming or ~/.config). Relative paths are resolved with filepath.Abs
+// (i.e. relative to the CWD), matching usual CLI expectations.
 func resolveConfigPath(path string) (string, error) {
-	clean := filepath.Clean(path)
-	abs, err := filepath.Abs(clean)
+	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return "", fmt.Errorf("%s", t("config.path_invalid", err))
 	}
@@ -182,31 +251,24 @@ func resolveConfigPath(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s", t("config.path_invalid", err))
 	}
-	underExe, err := pathUnderBase(exeBase, abs)
-	if err != nil {
-		return "", fmt.Errorf("%s", t("config.path_invalid", err))
-	}
-	underCwd, err := pathUnderBase(cwd, abs)
-	if err != nil {
-		return "", fmt.Errorf("%s", t("config.path_invalid", err))
-	}
-	underHome := false
+	bases := []string{exeBase, cwd}
 	if home := getHomeDirForConfigPaths(); home != "" {
-		underHome, err = pathUnderBase(home, abs)
+		bases = append(bases, home)
+	}
+	for _, base := range bases {
+		under, err := pathUnderBase(base, abs)
 		if err != nil {
 			return "", fmt.Errorf("%s", t("config.path_invalid", err))
 		}
+		if under {
+			return abs, nil
+		}
 	}
-	if !underExe && !underCwd && !underHome {
-		return "", fmt.Errorf("%s", t("config.path_outside_executable", abs))
-	}
-	return abs, nil
+	return "", fmt.Errorf("%s", t("config.path_outside_executable", abs))
 }
 
-/*
- * getExecutableDir returns the directory of the running executable.
- * Used for path resolution and to place sconfig.debug.txt next to the binary.
- */
+// getExecutableDir returns the directory of the running executable. It is used
+// for path resolution and to place sconfig.debug.txt next to the binary.
 func getExecutableDir() (string, error) {
 	path, err := os.Executable()
 	if err != nil {
@@ -215,11 +277,9 @@ func getExecutableDir() (string, error) {
 	return filepath.Dir(path), nil
 }
 
-/*
- * writeDebugLog appends one line to sconfig.debug.txt in the executable directory.
- * Line format: YYYY-MM-DD HH:MM:SS<TAB>hardwareID (hex)<TAB>identifiers
- * Only used when debug mode is on.
- */
+// writeDebugLog appends one line to sconfig.debug.txt in the executable
+// directory. Line format: YYYY-MM-DD HH:MM:SS<TAB>hardwareID (hex)<TAB>identifiers.
+// Only used when debug mode is on.
 func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
 	dir, err := getExecutableDir()
 	if err != nil {
@@ -229,12 +289,10 @@ func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
 	path := filepath.Join(dir, debugLogFilename)
 	if onlyOnInit {
 		if _, err := os.Stat(path); err == nil {
-			// if the file already exists, do nothing
-			return
+			return // the file already exists
 		}
 	}
-	now := time.Now()
-	line := now.Format("2006-01-02 15:04:05") + "\t" + fmt.Sprintf("0x%016x", hardwareID) + "\t" + identifiers + "\n"
+	line := time.Now().Format("2006-01-02 15:04:05") + "\t" + fmt.Sprintf("0x%016x", hardwareID) + "\t" + identifiers + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] cannot open debug log %s: %v\n", path, err)
@@ -244,846 +302,115 @@ func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
 	_ = f.Close()
 }
 
-/*
- * Check if the system is running on a virtual machine
- * Uses multiple detection methods for reliability
- */
-func isVirtualMachine() bool {
-	if runtime.GOOS == "windows" {
-		// Windows VM detection using WMI
-		out, err := newCommand("wmic", "computersystem", "get", "Manufacturer,Model", "/value").Output()
-		if err == nil {
-			manufacturer := ""
-			model := ""
-			lines := strings.Split(string(out), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "Manufacturer=") {
-					manufacturer = strings.ToLower(strings.TrimSpace(line[13:]))
-				} else if strings.HasPrefix(line, "Model=") {
-					model = strings.ToLower(strings.TrimSpace(line[6:]))
-				}
-			}
-
-			vmIndicators := []string{
-				"vmware", "virtualbox", "microsoft corporation", "xen",
-				"parallels", "qemu", "kvm", "innotek", "bochs",
-			}
-
-			for _, indicator := range vmIndicators {
-				if strings.Contains(manufacturer, indicator) || strings.Contains(model, indicator) {
-					return true
-				}
-			}
-
-			// Check for Hyper-V (Virtual Machine in Model)
-			if strings.Contains(model, "virtual") {
-				return true
-			}
-		}
-		return false
-	}
-
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// Method 1: systemd-detect-virt (most reliable)
-	out, err := newCommand("systemd-detect-virt").Output()
-	if err == nil {
-		virt := strings.TrimSpace(string(out))
-		// Returns "none" on bare metal, or VM type (kvm, vmware, qemu, etc.)
-		if virt != "none" && virt != "" {
-			return true
-		}
-	}
-
-	// Method 2: Check DMI vendor/product
-	checks := []string{
-		"/sys/class/dmi/id/sys_vendor",
-		"/sys/class/dmi/id/product_name",
-		"/sys/class/dmi/id/chassis_vendor",
-	}
-
-	vmIndicators := []string{
-		"qemu", "kvm", "vmware", "virtualbox", "xen",
-		"parallels", "microsoft", "bochs", "bhyve",
-	}
-
-	for _, file := range checks {
-		content, err := os.ReadFile(file)
-		if err == nil {
-			contentStr := strings.ToLower(strings.TrimSpace(string(content)))
-			for _, indicator := range vmIndicators {
-				if strings.Contains(contentStr, indicator) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-/*
- * getActiveNetworkInterface finds the network interface that has the active internet connection
- * by checking the default route. Returns the interface name or empty string if not found.
- */
-func getActiveNetworkInterface(debugOutput bool) string {
-	switch runtime.GOOS {
-	case "windows":
-		// On Windows, use "route print" to find the interface with default route (0.0.0.0)
-		// First, get the interface index from the route table
-		out, err := newCommand("cmd", "/C", "route print 0.0.0.0").Output()
-		if err == nil {
-			output := string(out)
-			lines := strings.Split(output, "\n")
-			var interfaceIndex string
-			// Look for the active route line (0.0.0.0 with gateway)
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				fields := strings.Fields(line)
-				// Format: "0.0.0.0 0.0.0.0 <gateway> <gateway> <metric> <interface_index>"
-				if len(fields) >= 6 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" && strings.Contains(fields[2], ".") {
-					interfaceIndex = fields[len(fields)-1]
-					break
-				}
-			}
-
-			if interfaceIndex != "" {
-				// Now find the interface name by index using "netsh interface show interface"
-				out2, err2 := newCommand("cmd", "/C", "netsh interface show interface").Output()
-				if err2 == nil {
-					lines2 := strings.Split(string(out2), "\n")
-					for _, line := range lines2 {
-						fields := strings.Fields(line)
-						// Format: "Enabled/Disabled <connection_type> <interface_name>"
-						// Or we can use wmic to get interface by index
-						if len(fields) >= 3 {
-							// Try to match by checking if this line contains relevant info
-						}
-					}
-				}
-
-				// Alternative: use wmic to get interface name by index
-				cmd := fmt.Sprintf("wmic path Win32_NetworkAdapter where \"InterfaceIndex=%s\" get Name", interfaceIndex)
-				out3, err3 := newCommand("cmd", "/C", cmd).Output()
-				if err3 == nil {
-					lines3 := strings.Split(string(out3), "\n")
-					for _, line := range lines3 {
-						line = strings.TrimSpace(line)
-						if line != "" && line != "Name" && !strings.HasPrefix(line, "---") {
-							if debugOutput {
-								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found active network adapter (index %s): %s\n", interfaceIndex, line)
-							}
-							return line
-						}
-					}
-				}
-			}
-		}
-
-		// Fallback: use ipconfig to find the adapter with default gateway
-		out, err = newCommand("cmd", "/C", "ipconfig").Output()
-		if err == nil {
-			lines := strings.Split(string(out), "\n")
-			var currentAdapter string
-			hasGateway := false
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				// Check for adapter name (ends with ":")
-				if strings.HasSuffix(line, ":") && !strings.Contains(line, "Windows IP") && !strings.Contains(line, "Configuration") {
-					// Reset when we find a new adapter
-					if hasGateway && currentAdapter != "" {
-						// We already found one with gateway, return it
-						if debugOutput {
-							fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found active network adapter: %s\n", currentAdapter)
-						}
-						return currentAdapter
-					}
-					currentAdapter = strings.TrimSuffix(line, ":")
-					hasGateway = false
-				}
-				// Check for default gateway
-				if strings.HasPrefix(line, "Default Gateway") && strings.Contains(line, ".") {
-					hasGateway = true
-				}
-			}
-			// Check if the last adapter had a gateway
-			if hasGateway && currentAdapter != "" {
-				if debugOutput {
-					fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found active network adapter: %s\n", currentAdapter)
-				}
-				return currentAdapter
-			}
-		}
-
-	case "linux", "darwin":
-		// On Linux/Mac, use "ip route get" or "route get" to find the interface for default route
-		var cmd *exec.Cmd
-		if runtime.GOOS == "linux" {
-			cmd = newCommand("ip", "route", "get", "8.8.8.8")
-		} else {
-			// macOS
-			cmd = newCommand("route", "-n", "get", "8.8.8.8")
-		}
-		out, err := cmd.Output()
-		if err == nil {
-			output := string(out)
-			lines := strings.Split(output, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if runtime.GOOS == "linux" {
-					// Linux "ip route" output format: "8.8.8.8 via ... dev <interface> ..."
-					if strings.Contains(line, "dev ") {
-						parts := strings.Fields(line)
-						for i, part := range parts {
-							if part == "dev" && i+1 < len(parts) {
-								iface := parts[i+1]
-								if debugOutput {
-									fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found active network interface: %s\n", iface)
-								}
-								return iface
-							}
-						}
-					}
-				} else {
-					// macOS "route get" output format: "interface: <interface>"
-					if strings.HasPrefix(line, "interface:") {
-						parts := strings.Fields(line)
-						if len(parts) >= 2 {
-							iface := parts[1]
-							if debugOutput {
-								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found active network interface: %s\n", iface)
-							}
-							return iface
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-/*
- * This function is a default function that can be overridden and generates a 64-bit number
- * that uniquely identifies a system in such a way that it is unlikely that someone can simply build
- * a second system that gets the identical ID. This allows system-specific keys to be generated
- * that are used for encrypting passwords in config files.
- * On virtual machines, prioritizes stable identifiers like machine-id and product_uuid.
- *
- */
-func secure_config_getHardwareID() (uint64, error) {
-	return secure_config_getHardwareID_debug(false)
-}
-
-func secure_config_getHardwareID_debug(debugOutput bool) (uint64, error) {
-	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] ========================================\n")
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] sconfig Version: %s\n", Version)
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] sconfig BuildTime: %s\n", BuildTime)
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] ========================================\n")
-	}
-
-	var identifiers []string
-	isVM := isVirtualMachine()
-
-	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] VM detection: %v\n", isVM)
-	}
-
-	// MAC address of the network interface with active internet connection
-	// Get all interfaces first
-	interfaces, err := net.Interfaces()
-	if err == nil && len(interfaces) > 0 {
-		var macAddress string
-
-		// Try to find MAC address of the active interface by interface index
-		switch runtime.GOOS {
-		case "windows":
-			// On Windows, use ipconfig /all to find the adapter with default gateway
-			// This is more reliable than parsing route tables with varying formats
-			if debugOutput {
-				fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Using ipconfig /all to find active adapter\n")
-			}
-			out, err := newCommand("cmd", "/C", "ipconfig /all").Output()
-			if err == nil {
-				output := string(out)
-				lines := strings.Split(output, "\n")
-				var currentAdapterName string
-				var hasGateway bool
-				var adapterMAC string
-				var bestAdapterMAC string
-				var bestAdapterName string
-
-				for i, line := range lines {
-					line = strings.TrimSpace(line)
-
-					// Check for adapter name (ends with ":")
-					if strings.HasSuffix(line, ":") && !strings.Contains(line, "Windows IP") && !strings.Contains(line, "Configuration") {
-						// If previous adapter had gateway, save it as candidate
-						if hasGateway && currentAdapterName != "" && adapterMAC != "" {
-							bestAdapterMAC = adapterMAC
-							bestAdapterName = currentAdapterName
-							if debugOutput {
-								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found adapter with gateway: %s (MAC: %s)\n", currentAdapterName, adapterMAC)
-							}
-						}
-						// Start new adapter
-						currentAdapterName = strings.TrimSuffix(line, ":")
-						hasGateway = false
-						adapterMAC = ""
-					}
-
-					// Check for physical address (MAC)
-					if strings.HasPrefix(line, "Physical Address") || strings.HasPrefix(line, "Physische Adresse") || strings.HasPrefix(line, "Physikalische Adresse") {
-						parts := strings.Split(line, ":")
-						if len(parts) >= 2 {
-							adapterMAC = strings.TrimSpace(parts[1])
-							// Normalize MAC address format
-							adapterMAC = strings.ToLower(strings.ReplaceAll(adapterMAC, "-", ":"))
-						}
-					}
-
-					// Check for default gateway
-					if strings.HasPrefix(line, "Default Gateway") || strings.HasPrefix(line, "Standardgateway") {
-						// Check if it contains an IP address (has dots)
-						if strings.Contains(line, ".") || (strings.Contains(line, ":") && i < len(lines) && strings.Contains(lines[i+1], ".")) {
-							hasGateway = true
-							if debugOutput {
-								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Adapter %s has default gateway\n", currentAdapterName)
-							}
-						}
-					}
-				}
-
-				// Check last adapter
-				if hasGateway && currentAdapterName != "" && adapterMAC != "" {
-					bestAdapterMAC = adapterMAC
-					bestAdapterName = currentAdapterName
-					if debugOutput {
-						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Last adapter has gateway: %s (MAC: %s)\n", currentAdapterName, adapterMAC)
-					}
-				}
-
-				// Use the MAC address directly if found
-				if bestAdapterMAC != "" {
-					macAddress = bestAdapterMAC
-					if debugOutput {
-						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Using MAC address from active adapter '%s': %s\n", bestAdapterName, macAddress)
-					}
-				} else {
-					// Fallback: try to match adapter name with net.Interfaces()
-					if bestAdapterName != "" {
-						for _, iface := range interfaces {
-							ifaceNameLower := strings.ToLower(iface.Name)
-							adapterNameLower := strings.ToLower(bestAdapterName)
-							if strings.Contains(adapterNameLower, ifaceNameLower) || strings.Contains(ifaceNameLower, adapterNameLower) {
-								if iface.HardwareAddr != nil && iface.HardwareAddr.String() != "" {
-									macAddress = iface.HardwareAddr.String()
-									if debugOutput {
-										fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Matched adapter name to interface, using MAC: %s\n", macAddress)
-									}
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-		case "linux":
-			// On Linux, get interface name from route, then find MAC
-			cmd := newCommand("ip", "route", "get", "8.8.8.8")
-			out, err := cmd.Output()
-			if err == nil {
-				output := string(out)
-				lines := strings.Split(output, "\n")
-				var ifaceName string
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if strings.Contains(line, "dev ") {
-						parts := strings.Fields(line)
-						for i, part := range parts {
-							if part == "dev" && i+1 < len(parts) {
-								ifaceName = parts[i+1]
-								break
-							}
-						}
-					}
-				}
-				if ifaceName != "" {
-					for _, iface := range interfaces {
-						if iface.Name == ifaceName {
-							if iface.HardwareAddr != nil && iface.HardwareAddr.String() != "" {
-								macAddress = iface.HardwareAddr.String()
-								if debugOutput {
-									fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found MAC from active interface '%s': %s\n", ifaceName, macAddress)
-								}
-								break
-							}
-						}
-					}
-				}
-			}
-
-		case "darwin":
-			// On macOS, get interface name from route, then find MAC
-			cmd := newCommand("route", "-n", "get", "8.8.8.8")
-			out, err := cmd.Output()
-			if err == nil {
-				output := string(out)
-				lines := strings.Split(output, "\n")
-				var ifaceName string
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if strings.HasPrefix(line, "interface:") {
-						parts := strings.Fields(line)
-						if len(parts) >= 2 {
-							ifaceName = parts[1]
-							break
-						}
-					}
-				}
-				if ifaceName != "" {
-					for _, iface := range interfaces {
-						if iface.Name == ifaceName {
-							if iface.HardwareAddr != nil && iface.HardwareAddr.String() != "" {
-								macAddress = iface.HardwareAddr.String()
-								if debugOutput {
-									fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Found MAC from active interface '%s': %s\n", ifaceName, macAddress)
-								}
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Fallback: if we couldn't find the active interface, use the first available MAC address (sorted)
-		if macAddress == "" {
-			var macAddresses []string
-			for _, iface := range interfaces {
-				if iface.HardwareAddr != nil && iface.HardwareAddr.String() != "" {
-					macAddresses = append(macAddresses, iface.HardwareAddr.String())
-				}
-			}
-			// Sort to ensure consistent ordering
-			if len(macAddresses) > 0 {
-				for i := 0; i < len(macAddresses)-1; i++ {
-					for j := i + 1; j < len(macAddresses); j++ {
-						if macAddresses[i] > macAddresses[j] {
-							macAddresses[i], macAddresses[j] = macAddresses[j], macAddresses[i]
-						}
-					}
-				}
-				macAddress = macAddresses[0]
-				if debugOutput {
-					fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Active interface not found, using first MAC (sorted): %s\n", macAddress)
-				}
-			}
-		}
-
-		if macAddress != "" {
-			// Normalize MAC address: convert to lowercase and ensure consistent format
-			macAddress = strings.ToLower(strings.ReplaceAll(macAddress, "-", ":"))
-			// Ensure it's in standard format (xx:xx:xx:xx:xx:xx)
-			macAddress = strings.ReplaceAll(macAddress, " ", "")
-			identifiers = append(identifiers, macAddress)
-			if debugOutput {
-				fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Using MAC address (normalized): %s\n", macAddress)
-			}
-		}
-	}
-
-	// CPU ID and other hardware information depending on the operating system
-	switch runtime.GOOS {
-	case "windows":
-		if isVM {
-			// For Windows VMs: prioritize stable identifiers
-			// 1. MachineGuid from Registry (very stable on Windows)
-			out, err := newCommand("reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid").Output()
-			if err == nil {
-				lines := strings.Split(string(out), "\n")
-				for _, line := range lines {
-					if strings.Contains(line, "MachineGuid") {
-						parts := strings.Fields(line)
-						for i, part := range parts {
-							if part == "REG_SZ" && i+1 < len(parts) {
-								machineGuid := strings.TrimSpace(parts[i+1])
-								if machineGuid != "" {
-									identifiers = append(identifiers, machineGuid)
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// 2. SMBIOS UUID (usually stable on VMs)
-			out, err = newCommand("wmic", "csproduct", "get", "UUID", "/value").Output()
-			if err == nil {
-				lines := strings.Split(string(out), "\n")
-				for _, line := range lines {
-					if strings.HasPrefix(line, "UUID=") {
-						uuid := strings.TrimSpace(line[5:])
-						if uuid != "" {
-							// Normalize UUID: replace underscores with hyphens for consistency
-							uuid = strings.ReplaceAll(uuid, "_", "-")
-							// Remove trailing dots or other characters
-							uuid = strings.TrimRight(uuid, ".! ")
-							identifiers = append(identifiers, uuid)
-							if debugOutput {
-								fmt.Fprintf(os.Stderr, "[sconfig DEBUG] SMBIOS UUID (normalized): %s\n", uuid)
-							}
-							break
-						}
-					}
-				}
-			}
-		}
-
-		// Common identifiers (for both VM and physical)
-		// Windows-specific hardware IDs
-		// Baseboard and Product (usually single values)
-		// Parse them separately to handle empty values and ensure stability
-		baseboardCmds := []struct {
-			cmd  string
-			name string
-		}{
-			{"wmic baseboard get SerialNumber", "Baseboard SerialNumber"},
-			{"wmic baseboard get Product", "Baseboard Product"},
-		}
-
-		for _, cmdInfo := range baseboardCmds {
-			out, err := newCommand("cmd", "/C", cmdInfo.cmd).Output()
-			if err == nil {
-				lines := strings.Split(string(out), "\n")
-				if len(lines) > 1 {
-					value := strings.TrimSpace(lines[1])
-					if value != "" && value != cmdInfo.name {
-						identifiers = append(identifiers, value)
-						if debugOutput {
-							fmt.Fprintf(os.Stderr, "[sconfig DEBUG] %s: %s\n", cmdInfo.name, value)
-						}
-					}
-				}
-			}
-		}
-
-		// Handle diskdrive SerialNumber separately to ensure stable ordering
-		out, err := newCommand("cmd", "/C", "wmic diskdrive get SerialNumber").Output()
-		if err == nil {
-			lines := strings.Split(string(out), "\n")
-			var diskSerials []string
-			for i, line := range lines {
-				if i == 0 {
-					continue // Skip header
-				}
-				value := strings.TrimSpace(line)
-				if value != "" && value != "SerialNumber" {
-					diskSerials = append(diskSerials, value)
-				}
-			}
-			// Sort disk serials to ensure consistent ordering
-			if len(diskSerials) > 0 {
-				for i := 0; i < len(diskSerials)-1; i++ {
-					for j := i + 1; j < len(diskSerials); j++ {
-						if diskSerials[i] < diskSerials[j] {
-							diskSerials[i], diskSerials[j] = diskSerials[j], diskSerials[i]
-						}
-					}
-				}
-				identifiers = append(identifiers, diskSerials[0])
-				if debugOutput {
-					fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Disk SerialNumbers found: %d, using first (sorted): %s\n", len(diskSerials), diskSerials[0])
-				}
-			}
-		}
-
-		// On VMs, skip CPU ProcessorId as it's often unreliable
-		if !isVM {
-			// For CPU ProcessorId, collect all values and use the first one (sorted) for stability
-			out, err := newCommand("cmd", "/C", "wmic cpu get ProcessorId").Output()
-			if err == nil {
-				lines := strings.Split(string(out), "\n")
-				var cpuIds []string
-				for i, line := range lines {
-					if i == 0 {
-						continue // Skip header
-					}
-					value := strings.TrimSpace(line)
-					if value != "" && value != "ProcessorId" {
-						cpuIds = append(cpuIds, value)
-					}
-				}
-				// Sort CPU IDs to ensure consistent ordering across runs
-				if len(cpuIds) > 0 {
-					for i := 0; i < len(cpuIds)-1; i++ {
-						for j := i + 1; j < len(cpuIds); j++ {
-							if cpuIds[i] > cpuIds[j] {
-								cpuIds[i], cpuIds[j] = cpuIds[j], cpuIds[i]
-							}
-						}
-					}
-					identifiers = append(identifiers, cpuIds[0])
-					if debugOutput {
-						fmt.Fprintf(os.Stderr, "[sconfig DEBUG] CPU ProcessorIds found: %d, using first (sorted): %s\n", len(cpuIds), cpuIds[0])
-					}
-				}
-			}
-		}
-
-	case "linux":
-		if isVM {
-			// For VMs: prioritize stable identifiers
-			// 1. machine-id (very stable on VMs)
-			machineId, err := os.ReadFile("/etc/machine-id")
-			if err == nil {
-				machineIdStr := strings.TrimSpace(string(machineId))
-				if machineIdStr != "" {
-					identifiers = append(identifiers, machineIdStr)
-				}
-			}
-
-			// 2. product_uuid (usually stable on VMs)
-			productUuid, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
-			if err == nil {
-				productUuidStr := strings.TrimSpace(string(productUuid))
-				if productUuidStr != "" {
-					identifiers = append(identifiers, productUuidStr)
-				}
-			}
-		}
-
-		// Common identifiers (for both VM and physical)
-		cmds := []string{
-			"cat /sys/class/dmi/id/board_serial",
-		}
-
-		// Only add CPU serial if not on VM (often unreliable on VMs)
-		if !isVM {
-			// For CPU serial, collect all values and use the first one (sorted) for stability
-			out, err := newCommand("sh", "-c", "cat /proc/cpuinfo | grep 'Serial'").Output()
-			if err == nil {
-				lines := strings.Split(string(out), "\n")
-				var cpuSerials []string
-				for _, line := range lines {
-					// Extract serial number from lines like "Serial          : xxxxxxxx"
-					if strings.Contains(line, "Serial") {
-						parts := strings.Split(line, ":")
-						if len(parts) > 1 {
-							value := strings.TrimSpace(parts[1])
-							if value != "" {
-								cpuSerials = append(cpuSerials, value)
-							}
-						}
-					}
-				}
-				// Remove duplicates and sort for consistency
-				if len(cpuSerials) > 0 {
-					// Remove duplicates
-					seen := make(map[string]bool)
-					unique := []string{}
-					for _, serial := range cpuSerials {
-						if !seen[serial] {
-							seen[serial] = true
-							unique = append(unique, serial)
-						}
-					}
-					// Sort
-					for i := 0; i < len(unique)-1; i++ {
-						for j := i + 1; j < len(unique); j++ {
-							if unique[i] > unique[j] {
-								unique[i], unique[j] = unique[j], unique[i]
-							}
-						}
-					}
-					if len(unique) > 0 {
-						identifiers = append(identifiers, unique[0])
-						if debugOutput {
-							fmt.Fprintf(os.Stderr, "[sconfig DEBUG] CPU Serial numbers found: %d (unique: %d), using first (sorted): %s\n", len(cpuSerials), len(unique), unique[0])
-						}
-					}
-				}
-			}
-		}
-
-		for _, cmd := range cmds {
-			out, err := newCommand("sh", "-c", cmd).Output()
-			if err == nil {
-				value := strings.TrimSpace(string(out))
-				if value != "" {
-					identifiers = append(identifiers, value)
-				}
-			}
-		}
-	}
-
-	if len(identifiers) == 0 {
-		return 0, fmt.Errorf("no hardware identifiers found")
-	}
-
-	// Sort identifiers to ensure consistent ordering regardless of collection order
-	// This is critical because the order affects the hash
-	for i := 0; i < len(identifiers)-1; i++ {
-		for j := i + 1; j < len(identifiers); j++ {
-			if identifiers[i] > identifiers[j] {
-				identifiers[i], identifiers[j] = identifiers[j], identifiers[i]
-			}
-		}
-	}
-
-	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware identifiers found: %d (sorted)\n", len(identifiers))
-		for i, id := range identifiers {
-			fmt.Fprintf(os.Stderr, "[sconfig DEBUG]   Identifier %d: %s\n", i+1, id)
-		}
-	}
-
-	// Combine all identifiers and create a hash
-	combined := strings.Join(identifiers, "|")
-	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Combined identifiers: %s\n", combined)
-	}
-	hash := sha256.Sum256([]byte(combined))
-	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] SHA256 hash: %x\n", hash)
-	}
-	// Return first 64 bits as an uint64 ==> this is the pseudo-unique identifier of the system
-	hardwareID := uint64(hash[7])<<56 + uint64(hash[6])<<48 + uint64(hash[5])<<40 + uint64(hash[4])<<32 + uint64(hash[3])<<24 + uint64(hash[2])<<16 + uint64(hash[1])<<8 + uint64(hash[0])
-	if debugOutput {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID (uint64): %d (0x%016x)\n", hardwareID, hardwareID)
-		_ = os.Stderr.Sync() // flush so debug is visible even if process exits after error
-		writeDebugLog(hardwareID, combined, true)
-		lastDebugHardwareID = hardwareID
-		lastDebugIdentifiers = combined
-	}
-	return hardwareID, nil
-}
-
-// DebugHardwareID computes the current hardware ID and prints all intermediate
-// results to stderr (VM detection, MAC source, identifiers used, hash, final ID).
-// Use this to debug changing hardware keys: run it when the key is "wrong" and
-// compare the output with a run when the key was "right" to see which identifier
-// changed. Returns the same value as the internal key used for encryption.
+// DebugHardwareID computes the legacy hardware ID (v1) and the machine
+// identity (v2) and prints all intermediate results to stderr (VM detection,
+// MAC source, identifiers, hash, v2 sources). Run it when passwords no longer
+// decrypt and compare the output with a run on a working system. It returns
+// the legacy v1 hardware ID.
 func DebugHardwareID() (uint64, error) {
-	return secure_config_getHardwareID_debug(true)
+	apiMu.Lock()
+	defer apiMu.Unlock()
+	id, err := secure_config_getHardwareID_debug(true)
+	sources, srcErr := collectMachineSourcesV2()
+	printMachineSourcesV2(sources, srcErr)
+	return id, err
 }
 
 // LoadConfig reads a JSON configuration file into the provided struct, applies
-// default values from struct tags, synchronizes an optional `Version` field,
-// and manages password encryption/decryption.
+// default values from struct tags, synchronizes an optional top-level
+// `Version` field, and manages password encryption/decryption.
 //
-// Config-Pfad: `path` wird bereinigt und muss unterhalb des Verzeichnisses der
-// ausführbaren Datei oder unterhalb des aktuellen Arbeitsverzeichnisses liegen.
-// Relative Pfade werden wie üblich gegen das CWD aufgelöst (filepath.Abs).
+// Config path: `path` is cleaned and must lie under the directory of the
+// executable, under the current working directory or under the user's home
+// directory (%USERPROFILE% on Windows, ~ on Unix). Relative paths are resolved
+// against the CWD (filepath.Abs); symbolic links are resolved for the check.
 //
 // Behavior:
 //   - If the file does not exist, an empty configuration is assumed.
+//   - `default:"…"` tags are applied to all reachable structs, including
+//     slice/array/map elements and pointer targets loaded from the file.
 //   - Fields named `<Name>Password` and `<Name>SecurePassword` are treated as a
-//     pair. If the plaintext password differs from the recognized marker,
-//     it will be encrypted into `<Name>SecurePassword` and the plaintext field
-//     will be replaced by the marker string.
+//     pair (in nested structs, pointers, slices, arrays and maps as well). If
+//     the plaintext password differs from the recognized marker, it is
+//     encrypted into `<Name>SecurePassword` (v2 format) and the plaintext
+//     field is replaced by the marker string. Legacy v1 values are migrated
+//     to v2 automatically.
 //   - When `cleanConfig` is true, the function writes back a config file where
 //     passwords are present as plaintext (use with care), primarily for
 //     migration or inspection purposes.
 //   - On successful completion and when `cleanConfig` is false, passwords are
 //     decrypted in memory so callers can use the plaintext values directly.
-//   - `debugOutput` schaltet ausführliche Diagnoseausgaben (Hardware-ID, Schlüssel,
-//     Dateipfade) auf stderr frei. Das ist nur sinnvoll, wenn ein Fehler aufgetreten
-//     ist und Kenntnis der verwendeten Daten zur Analyse unabdingbar ist; im
-//     Normalbetrieb ausgeschaltet lassen (sensible Daten).
+//   - The file is written atomically; new files get permissions 0600.
+//   - `debugOutput` enables detailed diagnostics (hardware ID, keys, paths) on
+//     stderr. Only useful when an error occurred and the used data is needed
+//     for the analysis; keep it off in normal operation (sensitive data).
 //
-// The optional `getHardwareID_func` allows overriding the hardware-ID based key
-// derivation used for encryption, which is primarily intended for testing.
+// The optional `getHardwareID_func` replaces the machine identity (intended
+// for tests): its value is used as legacy hardware ID and as the only v2
+// source "override". The key state is set by the first call and kept until
+// ResetForTest.
 func LoadConfig(config interface{}, version int, path string, cleanConfig bool, debugOutput bool, getHardwareID_func ...func() (uint64, error)) error {
+	apiMu.Lock()
+	defer apiMu.Unlock()
 
 	path, err := resolveConfigPath(path)
 	if err != nil {
 		return err
 	}
+	configValue, err := configStruct(config)
+	if err != nil {
+		return err
+	}
 
-	var file []byte
-
-	// Create wrapper function for hardware ID retrieval with debug support
 	var hardwareIDFunc func() (uint64, error)
-	if len(getHardwareID_func) > 0 {
+	if len(getHardwareID_func) > 0 && getHardwareID_func[0] != nil {
 		hardwareIDFunc = getHardwareID_func[0]
-	} else {
-		// Create wrapper that calls the debug version
-		hardwareIDFunc = func() (uint64, error) {
-			return secure_config_getHardwareID_debug(debugOutput)
-		}
 	}
 	config_init(hardwareIDFunc, debugOutput)
 
-	writeMode := os.FileMode(0644)
-	fileInfo, statErr := os.Stat(path)
-	if statErr == nil {
-		writeMode = fileInfo.Mode().Perm()
-	}
-	if !os.IsNotExist(statErr) {
-		file, err = os.ReadFile(path)
+	writeMode := configFileMode(path)
+	file := []byte("{}")
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		file, err = readFileLimited(path, maxConfigFileSize)
 		if err != nil {
 			return fmt.Errorf(t("config.read_failed"), err)
 		}
 		if debugOutput {
-			// Den absoluten Pfad aus path ermitteln (das ist identisch zu der gelesenen Datei)
-			absPath, absErr := filepath.Abs(path)
-			if absErr != nil {
-				fmt.Fprintf(os.Stderr, "%s %v\n", t("config.debug_file_abs_path_error"), absErr)
-			} else {
-				fmt.Fprintf(os.Stderr, "%s %s\n", t("config.debug_file_abs_path"), absPath)
-			}
+			fmt.Fprintf(os.Stderr, "%s %s\n", t("config.debug_file_abs_path"), path)
 		}
-	} else {
-		file = []byte("{}")
 	}
 
-	// Analyze config type
-	configValue := reflect.ValueOf(config)
-	if configValue.Kind() == reflect.Ptr {
-		configValue = configValue.Elem()
-	} else {
-		return fmt.Errorf("%s", t("config.config_no_struct"))
-	}
-	if configValue.Kind() != reflect.Struct {
-		return fmt.Errorf("%s", t("config.config_no_struct"))
-	}
-
-	if err := updateDefaultValues(configValue); err != nil {
+	if err := applyDefaults(configValue); err != nil {
 		return fmt.Errorf(t("config.failed_defaulting"), err)
 	}
-
 	if err := json.Unmarshal(file, config); err != nil {
 		return fmt.Errorf(t("config.failed_parsing"), err)
 	}
+	if err := applyDecodedDefaults(configValue, file); err != nil {
+		return fmt.Errorf(t("config.failed_defaulting"), err)
+	}
+
 	changed := false
-	if err := updateVersionAndPasswords(configValue, version, &changed); err != nil {
+	if err := syncVersionField(configValue, version, &changed); err != nil {
+		return fmt.Errorf(t("config.failed_checking"), err)
+	}
+	if err := encryptPasswords(configValue, &changed); err != nil {
 		return fmt.Errorf(t("config.failed_checking"), err)
 	}
 	if cleanConfig {
-		/* Decrypt passwords before writing */
+		// Decrypt passwords before writing
 		if err := decodePasswords(configValue); err != nil {
 			return fmt.Errorf(t("config.failed_decode_pw"), err)
 		}
 		changed = true
 	}
 	if changed {
-		configJSON, err := json.MarshalIndent(config, "", "\t")
-		if err != nil {
-			return fmt.Errorf(t("config.failed_build_json"), err)
-		}
-		if err := os.WriteFile(path, configJSON, writeMode); err != nil {
-			return fmt.Errorf(t("config.failed_writing"), path, err)
+		if err := writeConfigFile(config, path, writeMode); err != nil {
+			return err
 		}
 	}
 	if !cleanConfig {
-		/* Decrypt passwords after writing */
+		// Decrypt passwords after writing
 		if err := decodePasswords(configValue); err != nil {
 			return fmt.Errorf(t("config.failed_decode_pw"), err)
 		}
@@ -1095,344 +422,108 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 // fields are encrypted in the file unless cleanConfig is true (then plaintext).
 // LoadConfig must have been called at least once before; otherwise UpdateConfig
 // returns an error. The path may differ from the one used in LoadConfig (e.g.
-// write to a backup file) but must likewise lie under the executable directory
-// or the current working directory.
-// Example: after the user changes the theme from "dark"
-// to "light" in the UI, set cfg.Theme = "light" and call UpdateConfig(cfg, "config.json").
+// write to a backup file) but must likewise lie under the executable directory,
+// the current working directory or the user's home directory. The `Version`
+// field is written as it is.
+// Example: after the user changes the theme from "dark" to "light" in the UI,
+// set cfg.Theme = "light" and call UpdateConfig(cfg, "config.json").
 func UpdateConfig(config interface{}, path string, cleanConfig ...bool) error {
+	apiMu.Lock()
+	defer apiMu.Unlock()
+
 	path, err := resolveConfigPath(path)
 	if err != nil {
 		return err
 	}
-	cleanConfigVal := false
-	if len(cleanConfig) > 0 {
-		cleanConfigVal = cleanConfig[0]
-	}
-	if !initialized {
+	cleanConfigVal := len(cleanConfig) > 0 && cleanConfig[0]
+	if !keys.initialized {
 		return fmt.Errorf("%s", t("config.load_first"))
 	}
-	configValue := reflect.ValueOf(config)
-	if configValue.Kind() == reflect.Ptr {
-		configValue = configValue.Elem()
-	} else {
-		return fmt.Errorf("%s", t("config.config_no_struct"))
+	configValue, err := configStruct(config)
+	if err != nil {
+		return err
 	}
-	if configValue.Kind() != reflect.Struct {
-		return fmt.Errorf("%s", t("config.config_no_struct"))
-	}
-	writeMode := os.FileMode(0644)
-	if fileInfo, err := os.Stat(path); err == nil {
-		writeMode = fileInfo.Mode().Perm()
-	}
+	writeMode := configFileMode(path)
 	if cleanConfigVal {
-		if err := decodePasswords(reflect.ValueOf(config)); err != nil {
+		if err := decodePasswords(configValue); err != nil {
 			return fmt.Errorf(t("config.failed_decode_pw"), err)
 		}
 	} else {
-		version := getStructVersion(configValue)
 		changed := false
-		if err := updateVersionAndPasswords(configValue, version, &changed); err != nil {
+		if err := encryptPasswords(configValue, &changed); err != nil {
 			return err
 		}
 	}
+	if err := writeConfigFile(config, path, writeMode); err != nil {
+		return err
+	}
+	if !cleanConfigVal {
+		if err := decodePasswords(configValue); err != nil {
+			return fmt.Errorf(t("config.failed_decode_pw"), err)
+		}
+	}
+	return nil
+}
+
+// configStruct returns the struct that config points to, or an error if
+// config is not a pointer to a struct.
+func configStruct(config interface{}) (reflect.Value, error) {
+	v := reflect.ValueOf(config)
+	if v.Kind() != reflect.Ptr || v.IsNil() || v.Elem().Kind() != reflect.Struct {
+		return reflect.Value{}, fmt.Errorf("%s", t("config.config_no_struct"))
+	}
+	return v.Elem(), nil
+}
+
+// writeConfigFile marshals config and writes it atomically to path.
+func writeConfigFile(config interface{}, path string, mode os.FileMode) error {
 	configJSON, err := json.MarshalIndent(config, "", "\t")
 	if err != nil {
 		return fmt.Errorf(t("config.failed_build_json"), err)
 	}
-	if err := os.WriteFile(path, configJSON, writeMode); err != nil {
+	if err := writeFileAtomic(path, configJSON, mode); err != nil {
 		return fmt.Errorf(t("config.failed_writing"), path, err)
 	}
-	if !cleanConfigVal {
-		if err := decodePasswords(reflect.ValueOf(config)); err != nil {
-			return fmt.Errorf(t("config.failed_decode_pw"), err)
-		}
-	}
 	return nil
 }
 
-// getStructVersion returns the value of the first "Version" field found in the
-// struct (top-level only), or 0 if not found or not an integer type.
-func getStructVersion(v reflect.Value) int {
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return 0
-	}
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if f.Name == "Version" {
-			fv := v.Field(i)
-			switch fv.Kind() {
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				return int(fv.Int())
-			}
-			return 0
-		}
-	}
-	return 0
-}
-
-/*
- * Password key initialization
- *
- * Kernfunktion: Auf demselben System muss immer derselbe Schlüssel erzeugt werden
- * (deterministisch aus der Hardware-/System-ID). Es geht nicht darum, ein
- * kryptographisch zufälliges Einmalgeheimnis zu erzeugen, sondern um einen
- * Schlüssel, der nur auf der betroffenen Maschine reproduzierbar ist und
- * fremde Systeme von der Entschlüsselung ausschließt.
- *
- * Key bytes are derived with a Go-1.23-compatible RNG (see key_rand_go123.go)
- * so that the same hardware ID yields the same key on all Go versions and
- * existing config files remain decryptable. Security is provided by the
- * hardware-derived input being unknowable without full machine access.
- * See securityreport.md and SECURITY.md.
- */
+// config_init prepares the key state and the password markers on the first
+// call (until ResetForTest). Keys are derived lazily on first use, so errors
+// of the machine identity are returned by the operation that needs a key.
+//
+// Design goal: the same machine must always derive the same key
+// (deterministically from the machine identity). The aim is not a random
+// one-time secret but a key that only this machine can reproduce, so that
+// other systems cannot decrypt the values.
 func config_init(getHardwareID_func func() (uint64, error), debugOutput bool) {
 	debugMode = debugOutput
-	if !initialized {
-		// Generate encryption key based on Hardware ID (deterministic by design)
-		hardwareID, err := getHardwareID_func()
-		if err != nil {
-			log.Fatalf("%s", t("config.hardware_id_failed"))
-		}
-		if debugOutput {
-			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Hardware ID used for key generation: %d (0x%016x)\n", hardwareID, hardwareID)
-		}
-		// Deterministic expansion: same seed => same key (required for same-machine decrypt).
-		// Use Go-1.23-compatible RNG (key_rand_go123.go) so key is stable across Go versions.
-		keyRNG := newGo123KeySource(int64(hardwareID & 0x7fffffffffffffff))
-		encryptionKey = make([]byte, 32)
-		for i := range encryptionKey {
-			encryptionKey[i] = byte(keyRNG.Int63() >> 16 & 0xff)
-		}
-		if debugOutput {
-			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Encryption key (32 bytes): %x\n", encryptionKey)
-			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Encryption key (hex string): %s\n", fmt.Sprintf("%x", encryptionKey))
-		}
-		curr_lang := getCurrentLanguage()
-		setLanguage("de")
-		PASSWORD_IS_SECURE_de = t("config.password_message")
-		setLanguage("en")
-		PASSWORD_IS_SECURE_en = t("config.password_message")
-		setLanguage(curr_lang)
-		PASSWORD_IS_SECURE = t("config.password_message")
-		if debugOutput {
-			fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Password secure marker: %s\n", PASSWORD_IS_SECURE)
+	if keys.initialized {
+		return
+	}
+	resetKeys()
+	keys.initialized = true
+	if getHardwareID_func != nil {
+		keys.hardwareIDFunc = getHardwareID_func
+		keys.overridden = true
+	} else {
+		keys.hardwareIDFunc = func() (uint64, error) {
+			return secure_config_getHardwareID_debug(debugMode)
 		}
 	}
-	initialized = true
+	PASSWORD_IS_SECURE_de = markerText("de")
+	PASSWORD_IS_SECURE_en = markerText("en")
+	PASSWORD_IS_SECURE = markerText(getCurrentLanguage())
+	if debugOutput {
+		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Password secure marker: %s\n", PASSWORD_IS_SECURE)
+	}
 }
 
-// ResetForTest clears the package-initialized state so the next LoadConfig
-// will derive the key again from the given hardware-ID function. For tests only.
+// ResetForTest clears the package state so the next LoadConfig derives the
+// keys again from the given hardware-ID function. For tests only.
 func ResetForTest() {
-	initialized = false
-}
-
-/*
- * Go through the structure and set the default values present
- * in the annotations
- */
-func updateDefaultValues(v reflect.Value) error {
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return nil
-	}
-	type_info := v.Type()
-	// Iterate through all fields
-	for i := 0; i < type_info.NumField(); i++ {
-		field := type_info.Field(i)
-		fieldValue := v.Field(i)
-		if field.Type.Kind() == reflect.Struct {
-			if err := updateDefaultValues(fieldValue); err != nil {
-				return fmt.Errorf(t("config.default_error"), err)
-			}
-		} else if field.Type.Kind() == reflect.Slice {
-			for i := 0; i < fieldValue.Len(); i++ {
-				if fieldValue.Index(i).Kind() == reflect.Struct {
-					if err := updateDefaultValues(fieldValue.Index(i)); err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			defaultValue, found := field.Tag.Lookup("default")
-			if found {
-				if !fieldValue.CanSet() {
-					return fmt.Errorf("%s", t("config.field_not_settable", field.Name))
-				}
-				switch fieldValue.Kind() {
-				case reflect.String:
-					fieldValue.SetString(defaultValue)
-				case reflect.Int, reflect.Int64:
-					value, err := strconv.Atoi(defaultValue)
-					if err != nil {
-						return fmt.Errorf(t("config.default_error"), err)
-					}
-					fieldValue.SetInt(int64(value))
-				case reflect.Bool:
-					boolValue, err := strconv.ParseBool(defaultValue)
-					if err != nil {
-						return fmt.Errorf(t("config.default_error"), err)
-					}
-					fieldValue.SetBool(boolValue)
-				default:
-					return fmt.Errorf(t("config.default_unsupported"), fieldValue.Kind())
-				}
-			}
-		}
-	}
-	return nil
-}
-
-/*
- * Check new content and update encrypted passwords and version as needed
- * If changes are made, the modified file will be written back at the end
- */
-func updateVersionAndPasswords(v reflect.Value, version int, changed *bool) error {
-	if v.Kind() == reflect.Ptr {
-		//fmt.Printf("Pointer\n")
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return nil
-	}
-	t := v.Type()
-	// Iterate through all fields
-	for i := 0; i < t.NumField(); i++ {
-
-		field := t.Field(i)
-		fieldValue := v.Field(i)
-
-		// Process nested structures recursively
-		if field.Type.Kind() == reflect.Struct {
-			if err := updateVersionAndPasswords(fieldValue, version, changed); err != nil {
-				return err
-			}
-		} else if field.Type.Kind() == reflect.Slice {
-			//fmt.Printf("Slice[0..%d]\n", fieldValue.Len()-1)
-			for i := 0; i < fieldValue.Len(); i++ {
-				//fmt.Printf("Slice-Element %d:\n", i)
-				if fieldValue.Index(i).Kind() == reflect.Struct {
-					if err := updateVersionAndPasswords(fieldValue.Index(i), version, changed); err != nil {
-						return err
-					}
-				} else {
-					//fmt.Printf(" is '%v' (%s)\n", fieldValue.Index(i), fieldValue.Index(i).Kind().String())
-				}
-			}
-		} else {
-			// Version check
-			if field.Name == "Version" {
-				if err := syncVersionField(fieldValue, version, changed); err != nil {
-					return err
-				}
-			}
-			// Password handling
-			if strings.HasSuffix(field.Name, "SecurePassword") {
-				pw_prefix := strings.TrimSuffix(field.Name, "SecurePassword")
-				for j := 0; j < t.NumField(); j++ {
-					if t.Field(j).Name == pw_prefix+"Password" {
-						field2Value := v.Field(j)
-						passwordVal := field2Value.String()
-						secureVal := fieldValue.String()
-						if isPasswordMarker(passwordVal) {
-							if secureVal == "" {
-								return passwordPairError(pw_prefix, "config.secure_password_missing")
-							}
-							break
-						}
-						if passwordVal != "" {
-							// New password found in plain text
-							password, err := encrypt(passwordVal)
-							if err != nil {
-								return err
-							}
-							fieldValue.SetString(password)
-							field2Value.SetString(PASSWORD_IS_SECURE)
-							*changed = true
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-/*
- * Decrypt the encrypted passwords so that the encryption is transparent in the main program.
- */
-func decodePasswords(v reflect.Value) error {
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return nil
-	}
-	type_info := v.Type()
-	// Iterate through all fields
-	for i := 0; i < type_info.NumField(); i++ {
-		field := type_info.Field(i)
-		fieldValue := v.Field(i)
-
-		// Process recursively nested structures
-		if field.Type.Kind() == reflect.Struct {
-			if err := decodePasswords(fieldValue); err != nil {
-				return err
-			}
-		} else if field.Type.Kind() == reflect.Slice {
-			for i := 0; i < fieldValue.Len(); i++ {
-				if fieldValue.Index(i).Kind() == reflect.Struct {
-					if err := decodePasswords(fieldValue.Index(i)); err != nil {
-						return err
-					}
-				}
-			}
-		} else {
-			// Password processing
-			if strings.HasSuffix(field.Name, "SecurePassword") {
-				pw_prefix := strings.TrimSuffix(field.Name, "SecurePassword")
-				for j := 0; j < type_info.NumField(); j++ {
-					if type_info.Field(j).Name == pw_prefix+"Password" {
-						field2Value := v.Field(j)
-						secureVal := fieldValue.String()
-						passwordVal := field2Value.String()
-						if secureVal == "" {
-							if isPasswordMarker(passwordVal) {
-								return passwordPairError(pw_prefix, "config.secure_password_missing")
-							}
-							break
-						}
-						if err := validateEncryptedPasswordB64(secureVal); err != nil {
-							if debugMode {
-								writeDebugLog(lastDebugHardwareID, lastDebugIdentifiers, false)
-							}
-							return passwordPairError(pw_prefix, "config.encrypted_password_invalid", err)
-						}
-						password, err := decrypt(secureVal)
-						if err != nil {
-							if debugMode {
-								writeDebugLog(lastDebugHardwareID, lastDebugIdentifiers, false)
-							}
-							return passwordPairError(pw_prefix, "config.decrypt_failed", err)
-						}
-						if !field2Value.CanSet() {
-							return fmt.Errorf("%s", t("config.field_not_settable", pw_prefix+"Password"))
-						}
-						field2Value.SetString(password)
-						break
-					}
-				}
-			}
-		}
-	}
-	return nil
+	apiMu.Lock()
+	defer apiMu.Unlock()
+	resetKeys()
 }
 
 func isPasswordMarker(value string) bool {
@@ -1459,7 +550,17 @@ func passwordPairError(prefix, messageKey string, detail ...interface{}) error {
 	return fmt.Errorf("%s", t(messageKey, fieldName, detail[0]))
 }
 
-func syncVersionField(fieldValue reflect.Value, version int, changed *bool) error {
+// syncVersionField sets the top-level field `Version` (also when promoted from
+// an embedded struct) to version. Nested structs keep their own Version.
+func syncVersionField(v reflect.Value, version int, changed *bool) error {
+	field, ok := v.Type().FieldByName("Version")
+	if !ok || !field.IsExported() {
+		return nil
+	}
+	fieldValue, err := v.FieldByIndexErr(field.Index)
+	if err != nil {
+		return nil // embedded nil pointer: no Version field to sync
+	}
 	if !fieldValue.CanSet() {
 		return fmt.Errorf("%s", t("config.field_not_settable", "Version"))
 	}
@@ -1478,68 +579,4 @@ func syncVersionField(fieldValue reflect.Value, version int, changed *bool) erro
 		return fmt.Errorf("%s", t("config.version_type_unsupported", fieldValue.Kind()))
 	}
 	return nil
-}
-
-// validateEncryptedPasswordB64 checks whether a value can plausibly be an
-// AES-GCM ciphertext produced by encrypt() before decryption is attempted.
-func validateEncryptedPasswordB64(text string) error {
-	if text == "" {
-		return fmt.Errorf("empty encrypted password")
-	}
-	if len(text) > maxEncryptedPasswordB64Len {
-		return fmt.Errorf("encrypted password too long (%d characters, max %d)", len(text), maxEncryptedPasswordB64Len)
-	}
-	data, err := base64.StdEncoding.DecodeString(text)
-	if err != nil {
-		return fmt.Errorf("invalid base64: %w", err)
-	}
-	const gcmTagSize = 16
-	minLen := 12 + gcmTagSize
-	if len(data) < minLen {
-		return fmt.Errorf("ciphertext too short (need at least %d bytes, got %d)", minLen, len(data))
-	}
-	return nil
-}
-
-func encrypt(text string) (string, error) {
-	block, err := aes.NewCipher(encryptionKey)
-	if err != nil {
-		return "", fmt.Errorf("encrypt: cipher init: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("encrypt: GCM init: %w", err)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	io.ReadFull(rand.Reader, nonce)
-	ciphertext := gcm.Seal(nonce, nonce, []byte(text), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
-func decrypt(text string) (string, error) {
-	if err := validateEncryptedPasswordB64(text); err != nil {
-		return "", fmt.Errorf("decrypt: %w", err)
-	}
-	block, err := aes.NewCipher(encryptionKey)
-	if err != nil {
-		return "", fmt.Errorf("decrypt: cipher init: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("decrypt: GCM init: %w", err)
-	}
-	data, err := base64.StdEncoding.DecodeString(text)
-	if err != nil {
-		return "", fmt.Errorf("decrypt: invalid base64: %w", err)
-	}
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return "", fmt.Errorf("decrypt: ciphertext too short (need at least %d bytes)", nonceSize)
-	}
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", fmt.Errorf("decrypt: %w", err)
-	}
-	return string(plaintext), nil
 }

@@ -24,5 +24,16 @@
   "config.load_first":"Zuerst muss eine Config geladen werden, bevor sie geschrieben werden kann",
   "config.password_message":"Hier neues Passwort eintragen",
   "config.path_invalid": "Ungültiger Config-Pfad: %s",
-  "config.path_outside_executable": "Config-Pfad liegt weder unter dem Verzeichnis der ausführbaren Datei noch unter dem aktuellen Arbeitsverzeichnis noch unter dem Benutzerverzeichnis: %s"
+  "config.path_outside_executable": "Config-Pfad liegt weder unter dem Verzeichnis der ausführbaren Datei noch unter dem aktuellen Arbeitsverzeichnis noch unter dem Benutzerverzeichnis: %s",
+  "config.v2_source_missing": "die für diesen Wert verwendete Rechner-Identitätsquelle \"%s\" ist auf diesem System nicht lesbar (fehlt, keine Berechtigung oder geändert)",
+  "config.debug_file_abs_path": "[sconfig DEBUG] Config-Datei:",
+  "config.file_too_large": "Die Datei %s ist größer als die erlaubten %d Bytes",
+  "config.legacy_rejected": "Alter verschlüsselter Wert (vor Version 3.0.0) abgelehnt, weil der strikte Modus aktiv ist; Passwort bitte erneut im Klartext eintragen",
+  "config.keyfile_invalid": "Die Schlüsseldatei %s kann nicht verwendet werden: %v",
+  "config.warn_migrated": "%d alte(r) verschlüsselte(r) Wert(e) wurde(n) im Format v2 neu verschlüsselt. Alte Kopien dieser Datei (Backups, Repositories) bleiben schwach verschlüsselt: diese Passwörter ändern, falls solche Kopien in fremde Hände gelangt sein können",
+  "config.warn_migration_failed": "%d alte(r) verschlüsselte(r) Wert(e) konnte(n) nicht ins Format v2 migriert werden (keine Rechner-Identitätsquelle verfügbar) und bleibt/bleiben schwach verschlüsselt",
+  "config.warn_permissions": "Die Config-Datei %s ist für andere Benutzer lesbar (Rechte %v); bitte auf den Eigentümer beschränken (chmod 600)",
+  "config.warn_docroot": "Die .env-Datei %s liegt im Dokumentverzeichnis des Webservers; bitte außerhalb ablegen oder den Zugriff sperren",
+  "config.invalid_key": "Ungültiger Variablenname \"%s\" (erlaubt: Buchstaben, Ziffern, _ und ., nicht mit einer Ziffer beginnend)",
+  "config.invalid_value": "Ungültiger Wert für \"%s\": Steuerzeichen wie Zeilenumbrüche sind nicht erlaubt und die Länge ist auf %d Zeichen begrenzt"
 }
