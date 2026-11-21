@@ -39,7 +39,7 @@ func SetWarningHandler(handler func(message string)) {
 
 // SetRejectLegacy controls the strict mode. With true, legacy v1 values
 // (encrypted before version 3.0.0, small key space) are refused with an error
-// instead of being decrypted and migrated to v2.
+// instead of being decrypted and migrated to v3.
 func SetRejectLegacy(reject bool) {
 	apiMu.Lock()
 	defer apiMu.Unlock()
@@ -67,11 +67,8 @@ func SetKeyFile(path string) error {
 		}
 	}
 	settings.keyFileValue = value
-	// sources and v2 keys must be collected again
-	keys.v2Collected = false
-	keys.v2Sources = nil
-	keys.v2Err = nil
-	keys.v2Keys = nil
+	// sources and keys must be collected again
+	resetSources()
 	return nil
 }
 

@@ -5,10 +5,10 @@ namespace Sconfig;
 /**
  * Legacy hardware ID and key of the PHP implementation ("v1"), FROZEN.
  *
- * Encrypted values without the "v2:" prefix were encrypted with this key. The
+ * Encrypted values without a "v2:"/"v3:" prefix were encrypted with this key. The
  * derivation must never change, otherwise existing .env files become
  * unreadable. It is only used to decrypt such legacy values; they are
- * re-encrypted with v2 on the next load(). It differs from the Go legacy
+ * re-encrypted with v3 on the next load(). It differs from the Go legacy
  * derivation and has only 2^32 distinct keys (mt_srand uses 32 bits).
  *
  * @package Sconfig

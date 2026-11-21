@@ -176,7 +176,7 @@ class EnvLoaderAuditTest extends TestCase
         }
         EnvLoader::clear();
         EnvLoader::load($path);
-        self::assertStringContainsString('DB_SECURE_PASSWORD=v2:keyfile,override:', (string) file_get_contents($path));
+        self::assertStringContainsString('DB_SECURE_PASSWORD=v3:keyfile,override:', (string) file_get_contents($path));
         self::assertSame('with-keyfile', EnvLoader::get('DB_PASSWORD'));
 
         EnvLoader::setKeyFile(null);

@@ -89,6 +89,22 @@ Was sich für Anwendungen ändert:
   Werten mit Zeilenumbrüchen; `updateEnv()` schreibt keine Werte der
   Prozessumgebung mehr.
 
+## Upgrade auf 3.1 (Schlüsselformat v3)
+
+Version 3.1.0 behält die API (Go-Modul `github.com/janmz/sconfig/v3`,
+Composer `^3.0`), führt aber das Schlüsselformat v3 ein:
+
+- Neue Werte und alle vorhandenen v1- und v2-Werte werden beim nächsten
+  Laden als v3 geschrieben. sconfig 3.0.x kann v3-Werte nicht lesen – alle
+  Programme, die sich eine Config-Datei teilen, gleichzeitig aktualisieren.
+- v3-Werte sind zusätzlich an den Rechnernamen, die Architektur und das
+  Dateisystem der Konfigurationsdatei gebunden. Umbenennen des Rechners,
+  Neuerstellen eines Containers ohne festen Hostnamen oder Verschieben der
+  Konfigurationsdatei auf ein anderes Laufwerk machen sie unlesbar, siehe
+  [Vor- und Nachteile der v3-Quellen](#vor--und-nachteile-der-v3-quellen).
+- Go: `DebugHardwareID` akzeptiert einen optionalen Config-Pfad (für
+  `fsid`).
+
 ## Go-Variante
 
 ### Funktionen
@@ -259,7 +275,8 @@ System-Identifikatoren, siehe
 [So entsteht die Hardware-ID](#so-entsteht-die-hardware-id)), wodurch sie auf
 anderen Systemen unbrauchbar sind. Von der PHP-Version verschlüsselte Werte
 kann die Go-Version auf demselben Rechner entschlüsseln und umgekehrt
-(Format v2; Alt-Werte v1 sind nicht austauschbar).
+(Formate v2 und v3, v3 auf demselben Dateisystem; Alt-Werte v1 sind nicht
+austauschbar).
 
 #### `.env`-Pfade
 
@@ -467,19 +484,122 @@ Siehe Abschnitt [PHP Internationalisierung](#php-internationalisierung) oben.
 
 Jeder verschlüsselte Wert beginnt mit seinem Format:
 
-- `v2:<Quellen>:<base64>` – aktuelles Format, geschrieben von Go und PHP
-  seit Version 3.0.0.
-- reines base64 ohne Präfix – Altformat v1 (vor 3.0.0). Es bleibt lesbar und
-  wird beim nächsten `LoadConfig` bzw. `EnvLoader::load()` automatisch als v2
+- `v3:<Quellen>:<base64>` – aktuelles Format, geschrieben von Go und PHP
+  seit Version 3.1.0.
+- `v2:<Quellen>:<base64>` – Format der Version 3.0.x. Es bleibt lesbar und
+  wird beim nächsten `LoadConfig` bzw. `EnvLoader::load()` automatisch als v3
   neu geschrieben.
+- reines base64 ohne Präfix – Altformat v1 (vor 3.0.0). Es bleibt lesbar und
+  wird ebenfalls automatisch als v3 neu geschrieben.
 
-### Aktuelles Format v2 (identisch in Go und PHP)
+### Aktuelles Format v3 (identisch in Go und PHP)
+
+Seit Version 3.1.0 nutzen neue Werte v3. v3 verwendet alle v2-Quellen
+(siehe [Format v2](#format-v2-300-lesen-und-migrieren) unten: Quellen,
+Normalisierung und Optionen gelten unverändert) und zusätzlich drei
+Quellen, die es auf jedem System gibt, auch in VMs und Containern:
+
+#### Zusätzliche Quellen
+
+- `hostname`: Rechnername des Betriebssystems – Go `os.Hostname()`, PHP
+  `gethostname()` (Windows: DNS-Hostname, nicht der auf 15 Zeichen gekürzte
+  NetBIOS-Name; Linux: Kernel-Hostname). Kein externer Befehl und keine
+  DNS-Abfrage (`hostname -f` wird nicht genutzt: der FQDN hängt von DNS,
+  `/etc/hosts` und dem Netzwerk ab und kann ohne Netz hängen).
+  Normalisierung: getrimmt, `A-Z` kleingeschrieben, 1–255 druckbare
+  ASCII-Zeichen; `localhost` und `localhost.localdomain` werden ignoriert.
+- `machtype`: native Rechnerarchitektur, normalisiert auf `amd64`, `arm64`,
+  `386`, `arm` oder den Rohwert (`a-z`, `0-9`, `_`, z. B. `riscv64`):
+  - Windows: `PROCESSOR_ARCHITECTURE` der Systemumgebung
+    (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`,
+    64-Bit-Ansicht) – nicht der Wert des Prozesses, der bei 32-Bit- oder
+    emulierten Prozessen abweicht.
+  - macOS: `arm64`, wenn `sysctl -n hw.optional.arm64` `1` liefert (auch
+    unter Rosetta korrekt), sonst `uname -m`.
+  - Linux, FreeBSD und andere: `uname -m` (PHP `php_uname('m')`).
+- `fsid`: ID des Dateisystems, auf dem die Konfigurationsdatei liegt (gibt
+  es sie noch nicht: das nächste existierende Verzeichnis). Hex in
+  Kleinbuchstaben ohne führende Nullen; `0` wird ignoriert.
+  - Windows: Volume-Seriennummer (Go `GetFileInformationByHandle`, PHP
+    `stat()['dev']`; `vol` zeigt sie als `EA5D-C109`).
+  - Linux: `statfs` `f_fsid` als `val[0]<<32 | val[1]` (Go
+    `syscall.Statfs`, PHP `stat -f -c %i`; GNU coreutils und busybox
+    liefern denselben Wert).
+  - macOS, FreeBSD und andere: `st_dev` von `stat()` (macOS: untere
+    32 Bit). `stat -f` wird dort nicht genutzt: auf BSD-Systemen wählt es
+    das Ausgabeformat, nicht das Dateisystem.
+
+  Es wird das Dateisystem der Konfigurationsdatei verwendet und nicht das
+  des Programms, damit Go-Programme und PHP (dessen Programm `php` ist) für
+  Dateien auf demselben Dateisystem denselben Schlüssel ableiten.
+
+Mit Hardware-ID-Override (Tests) bleibt `override=<Zahl>` die einzige
+Quelle.
+
+#### Schlüssel und gespeicherter Wert (v3)
+
+Wie bei v2 (Eingabe-Schlüsselmaterial, AES-256-GCM, Feldbindung,
+Quellenliste), aber HKDF nutzt Salt `sconfig-v3` und Info
+`sconfig v3 aes-256-gcm`, und der gespeicherte Wert beginnt mit `v3:`,
+z. B. `v3:fsid,hostname,machineguid,machtype,smbiosuuid:PW3g…`.
+
+Lässt sich ein v3-Wert nicht entschlüsseln, weist die Fehlermeldung darauf
+hin, dass der Rechner umbenannt oder die Konfigurationsdatei auf ein anderes
+Dateisystem verschoben worden sein kann (`config.v3_key_mismatch`).
+Innerhalb eines Prozesses bleiben Werte einer zuvor geladenen Datei lesbar,
+wenn eine andere Datei geschrieben wird, z. B. ein Backup auf einem anderen
+Laufwerk per `UpdateConfig` / `updateEnv()`; diese Datei erhält ihre eigene
+`fsid`.
+
+#### Migration von v2-Werten
+
+Beim Laden wird jeder v2-Wert entschlüsselt, als v3 verschlüsselt und die
+Datei neu geschrieben – ohne Warnung, da v2 nicht schwach ist. Lässt sich
+ein v2-Wert nicht entschlüsseln (fehlende Quelle), schlägt das Laden wie
+bisher fehl. v1-Werte werden direkt nach v3 migriert (mit dem Hinweis, die
+Passwörter zu ändern). sconfig 3.0.x kann v3-Werte nicht lesen: alle
+Programme, die sich eine Konfigurationsdatei teilen, gleichzeitig
+aktualisieren.
+
+#### Vor- und Nachteile der v3-Quellen
+
+- **Vorteil:** Wer nur die Konfigurationsdatei hat, muss zusätzlich
+  Rechnername, Architektur und Dateisystem-ID kennen. Geklonte VMs, die
+  oft `machine-id` oder SMBIOS-UUID teilen, erhalten über den Rechnernamen
+  verschiedene Schlüssel. Eine auf ein anderes Laufwerk oder einen anderen
+  Rechner kopierte Konfigurationsdatei ist unlesbar.
+- **Nachteil Rechnername:** Wird der Rechner umbenannt, sind alle Werte
+  unlesbar. In Docker ist der Hostname die Container-ID (außer mit
+  `--hostname`), in Kubernetes der Pod-Name – ein neuer Container kann die
+  Werte nicht lesen.
+- **Nachteil fsid:** Verschieben der Konfigurationsdatei auf eine andere
+  Partition oder ein anderes Laufwerk, Neuformatieren und – unter Linux –
+  eine geänderte Gerätenummer bei Dateisystemen, deren `f_fsid` davon
+  abhängt (XFS, nach Umsortieren von Platten oder LVM-Änderungen), machen
+  die Werte unlesbar. In Containern erhält das Overlay-Root-Dateisystem für
+  jeden Container eine neue ID; die Konfigurationsdatei daher auf ein
+  Volume legen.
+- **Nachteil machtype:** nur wenige mögliche Werte, daher kaum Schutz gegen
+  Raten; dafür stabil.
+- Ohne jede v2-Quelle (z. B. Container ohne `/etc/machine-id`) bleiben nur
+  `hostname`, `machtype` und `fsid`: schwacher Schutz, dort eine
+  Schlüsseldatei verwenden.
+
+Vor dem Umbenennen des Rechners oder Verschieben der Konfigurationsdatei
+die Datei einmal mit Klartext-Passwörtern schreiben (`cleanConfig`) und
+danach wieder verschlüsseln lassen.
+
+### Format v2 (3.0.0, lesen und migrieren)
+
+Werte mit dem Präfix `v2:` wurden von 3.0.x geschrieben. Alle v2-Quellen
+sind auch v3-Quellen; Quellen, Normalisierung und Optionen unten gelten
+daher auch für v3.
 
 Der Name „Hardware-ID“ ist historisch. v2 nutzt Identitätsquellen des
 Rechners, die stabil und ohne Administratorrechte lesbar sind.
 MAC-Adressen, Netzwerkrouten, `ipconfig`, `wmic`, Laufwerks-, CPU- und
-Mainboard-Seriennummern, VM-Erkennung, Rechnername und PHP-Version werden
-nicht mehr verwendet.
+Mainboard-Seriennummern, VM-Erkennung und PHP-Version werden nicht mehr
+verwendet (der Rechnername ist in v3 wieder eine Quelle).
 
 #### Quellen
 
@@ -500,8 +620,10 @@ nicht mehr verwendet.
 - **FreeBSD:** `hostuuid` – Ausgabe von `/sbin/sysctl -n kern.hostuuid`.
 - **Optionale Schlüsseldatei:** `keyfile` – Hex-Inhalt einer geheimen Datei,
   siehe [Optionen](#optionen).
-- **Andere Systeme:** keine Quelle; Verschlüsseln scheitert mit
-  `config.hardware_id_failed` (es gibt keinen Ersatz).
+- **Andere Systeme:** keine v2-Quelle; v3 hat weiterhin `hostname`,
+  `machtype` und `fsid` (schwach, Schlüsseldatei verwenden). Ganz ohne
+  Quelle scheitert Verschlüsseln mit `config.hardware_id_failed` (es gibt
+  keinen Ersatz).
 - **Tests:** Mit Hardware-ID-Überschreibung (`getHardwareID_func` von
   `LoadConfig`, `EnvLoader::setHardwareIdForTest()`) ist die einzige Quelle
   `override=<Zahl>`.
@@ -564,8 +686,8 @@ nächsten Laden mit allen Quellen neu verschlüsselt.
 
 #### Migration von v1-Werten
 
-Beim Laden wird jeder v1-Wert mit dem Altschlüssel entschlüsselt, als v2
-verschlüsselt und die Datei neu geschrieben. Ist keine v2-Quelle verfügbar,
+Beim Laden wird jeder v1-Wert mit dem Altschlüssel entschlüsselt, als v3
+verschlüsselt und die Datei neu geschrieben. Ist keine Quelle verfügbar,
 bleibt der v1-Wert erhalten. Vor der Migration erstellte Backups enthalten
 weiter v1-Werte mit kleinem Schlüsselraum (siehe unten) – Passwörter wechseln,
 falls solche Kopien in fremde Hände gelangt sein können.
@@ -741,8 +863,8 @@ ergibt den AES-256-GCM-Schlüssel.
 Identifikatoren, Reihenfolge, MAC-Format, Byte-Reihenfolge,
 Schlüsselerzeugung und Chiffrat-Aufbau unterscheiden sich (Go v1:
 `Nonce | Chiffrat | Tag`, PHP v1: `IV | Tag | Chiffrat`). v1-Werte der einen
-Implementierung kann die andere nicht entschlüsseln. v2-Werte sind voll
-kompatibel.
+Implementierung kann die andere nicht entschlüsseln. v2- und v3-Werte sind
+voll kompatibel.
 
 #### Hardware und Schwächen von v1
 
@@ -776,8 +898,15 @@ lassen sich auf derselben Maschine nicht mehr entschlüsseln), hilft Folgendes.
 
 ### Warum sich der Schlüssel ändern kann
 
-v2-Werte (siehe [Quellen](#quellen)) ändern sich nur, wenn sich eine Quelle
-ändert:
+v2- und v3-Werte (siehe [Quellen](#quellen) und
+[Zusätzliche Quellen](#zusätzliche-quellen)) ändern sich nur, wenn sich
+eine Quelle ändert:
+
+- **Nur v3:** Rechner umbenannt (`hostname`; in Docker: neuer Container
+  ohne `--hostname`), Konfigurationsdatei auf ein anderes Laufwerk, eine
+  andere Partition oder ein anderes Dateisystem verschoben, Dateisystem neu
+  formatiert (`fsid`). Die Fehlermeldung enthält dann
+  `config.v3_key_mismatch`.
 
 - **Windows:** Windows neu installiert oder Sysprep (neue `MachineGuid`),
   Mainboard getauscht, Firmware oder Hypervisor hat die SMBIOS-UUID geändert.
@@ -789,7 +918,7 @@ v2-Werte (siehe [Quellen](#quellen)) ändern sich nur, wenn sich eine Quelle
 - **macOS / FreeBSD:** Logicboard getauscht / neue `kern.hostuuid`.
 
 Netzwerkänderungen, USB-Laufwerke, `wmic`, VM-Erkennung und Prozessrechte
-wirken sich auf v2 nicht mehr aus. Alt-Werte v1 (bis zu ihrer Migration)
+wirken sich auf v2 und v3 nicht mehr aus. Alt-Werte v1 (bis zu ihrer Migration)
 hängen weiter an den v1-Identifikatoren:
 
 - **Netzwerk:** Windows (Go): ein anderer Adapter hat eine Gateway-Zeile oder
@@ -813,8 +942,8 @@ hängen weiter an den v1-Identifikatoren:
 1. **Aktuelle Hardware-ID und alle Eingaben ausgeben (ohne Config-Datei):**
 
    ```go
-   id, err := sconfig.DebugHardwareID()
-   // v1-Identifikatoren, die v1-ID und die v2-Quellen gehen nach stderr.
+   id, err := sconfig.DebugHardwareID("config.json") // Pfad optional (fsid)
+   // v1-Identifikatoren, die v1-ID und die v3-Quellen gehen nach stderr.
    ```
 
 2. **Oder** `LoadConfig` mit Debug aufrufen:
@@ -827,7 +956,7 @@ hängen weiter an den v1-Identifikatoren:
 
 3. Einmal ausführen, wenn der Schlüssel „falsch“ ist, und stderr speichern. Mit
    einem Lauf vergleichen, in dem der Schlüssel „richtig“ war (oder auf einer
-   anderen Maschine). Die Zeilen `[sconfig DEBUG]` zeigen die v2-Quellen
+   anderen Maschine). Die Zeilen `[sconfig DEBUG]` zeigen die v3-Quellen
    (`Name=Wert`) und für Alt-Werte VM-Erkennung, MAC und jeden
    v1-Identifikator; die abweichende(n) Zeile(n) sind die Ursache.
 
@@ -848,7 +977,7 @@ hängen weiter an den v1-Identifikatoren:
   Rechner verlassen (Backups, Repositories, Tickets). Jeder Prozess auf dem
   Rechner kann die Quellen lesen und damit den Schlüssel ableiten.
 - **Alt-Werte**: v1-Werte haben einen kleinen Schlüsselraum (ca. 2^31 / 2^32)
-  und werden beim Laden zu v2 migriert. Passwörter wechseln, falls alte Kopien
+  und werden beim Laden zu v3 migriert. Passwörter wechseln, falls alte Kopien
   in fremde Hände gelangt sein können.
 - **Transparente Entschlüsselung**: Passwörter werden automatisch im Speicher
   entschlüsselt für einfachen Zugriff

@@ -97,7 +97,7 @@ class EnvLoaderV2Test extends TestCase
         self::assertSame('shared-secret', Crypto::decrypt(self::GO_VALUE, 'SHARED'));
     }
 
-    public function testLegacyValueIsMigratedToV2(): void
+    public function testLegacyValueIsMigratedToV3(): void
     {
         $path = $this->envPath();
         $marker = I18n::builtinText('config.password_message', 'en');
@@ -105,20 +105,20 @@ class EnvLoaderV2Test extends TestCase
         EnvLoader::load($path);
         self::assertSame('legacy-secret', EnvLoader::get('DB_PASSWORD'));
         $content = (string) file_get_contents($path);
-        self::assertStringContainsString('DB_SECURE_PASSWORD=v2:override:', $content);
+        self::assertStringContainsString('DB_SECURE_PASSWORD=v3:override:', $content);
 
         EnvLoader::clear();
         EnvLoader::load($path);
         self::assertSame('legacy-secret', EnvLoader::get('DB_PASSWORD'));
     }
 
-    public function testNewValuesUseV2(): void
+    public function testNewValuesUseV3(): void
     {
         $path = $this->envPath();
         file_put_contents($path, "DB_PASSWORD=secret\n");
         EnvLoader::load($path);
         $content = (string) file_get_contents($path);
-        self::assertStringContainsString('DB_SECURE_PASSWORD=v2:override:', $content);
+        self::assertStringContainsString('DB_SECURE_PASSWORD=v3:override:', $content);
         self::assertStringNotContainsString('secret' . "\n", $content);
         self::assertSame('secret', EnvLoader::get('DB_PASSWORD'));
     }

@@ -17,16 +17,19 @@ namespace Sconfig;
  * Password handling:
  * - Fields named `<NAME>_PASSWORD` and `<NAME>_SECURE_PASSWORD` are treated as a pair
  * - If `<NAME>_PASSWORD` contains a plaintext password (not the marker), it is encrypted
- * - The encrypted value (v2 format, see Crypto) is stored in `<NAME>_SECURE_PASSWORD`
+ * - The encrypted value (v3 format, see Crypto) is stored in `<NAME>_SECURE_PASSWORD`;
+ *   it is bound to the machine, its host name and the file system of the .env file
  * - `<NAME>_PASSWORD` is replaced with a marker string
- * - Legacy values (before v2) are decrypted and re-encrypted with v2 on load()
+ * - Legacy and v2 values are decrypted and re-encrypted with v3 on load()
  * - In memory, passwords are automatically decrypted for transparent access
  *
  * @package Sconfig
  * @author Jan Neuhaus, VAYA Consulting
- * @version 3.0.0
+ * @version 3.1.0
  *
  * Changelog:
+ * 3.1.0 21.11.26 v3 key format (additional sources hostname, machtype, fsid of the
+ *                .env file), automatic migration of v2 values
  * 3.0.0 27.10.26 v2 key format shared with Go, migration of legacy values, format-preserving
  *                atomic writes, updateEnv() writes only file and set() keys
  * 1.2.0 27.02.26 set(), updateEnv(): persist changes (e.g. theme); require load() first; may write to different path
@@ -103,7 +106,7 @@ class EnvLoader
 
     /**
      * @internal For tests only: replace the machine identity by a fixed number
-     * (legacy hardware ID and v2 source "override"); null = real machine.
+     * (legacy hardware ID and the only v3 source "override"); null = real machine.
      */
     public static function setHardwareIdForTest(?int $hardwareId): void
     {
@@ -348,6 +351,7 @@ class EnvLoader
         if (! is_readable($filePath)) {
             throw new \RuntimeException(I18n::t('config.read_failed', $filePath));
         }
+        Crypto::setFile($filePath);
 
         [$parsed, $entries] = EnvFile::parse(EnvFile::readLines($filePath));
 
@@ -391,9 +395,10 @@ class EnvLoader
     }
 
     /**
-     * Encrypt plaintext passwords (v2), migrate legacy values to v2 and
-     * re-encrypt v2 values that use fewer sources than are available now.
-     * Warnings are issued for migrated and for not migratable legacy values.
+     * Encrypt plaintext passwords (v3), migrate legacy and v2 values to v3 and
+     * re-encrypt v3 values that use fewer sources than are available now.
+     * Warnings are issued for migrated and for not migratable legacy values
+     * (v2 values are migrated silently).
      *
      * @param array<string, string> $parsed Parsed key-value pairs (modified in place)
      * @return bool True if any changes were made
@@ -418,7 +423,7 @@ class EnvLoader
                 if ($secureValue === '') {
                     throw new \RuntimeException(I18n::t('config.secure_password_missing', $prefix));
                 }
-                $legacy = ! Crypto::isV2($secureValue);
+                $legacy = Crypto::isLegacy($secureValue);
                 if ($legacy || Crypto::needsUpgrade($secureValue)) {
                     $plain = self::decryptValue($prefix, $secureValue);
 
@@ -427,7 +432,7 @@ class EnvLoader
                         $changed = true;
                         $migrated += $legacy ? 1 : 0;
                     } catch (\RuntimeException $e) {
-                        // keep the readable old value until a v2 identity exists
+                        // keep the readable old value until a v3 identity exists
                         $failed += $legacy ? 1 : 0;
                     }
                 }
@@ -575,6 +580,7 @@ class EnvLoader
             throw new \RuntimeException(I18n::t('config.load_first'));
         }
         $filePath = self::resolveEnvFilePath($filePath);
+        Crypto::setFile($filePath);
         $parsed = [];
         $entries = [];
         if (file_exists($filePath) && is_readable($filePath)) {

@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -26,8 +28,8 @@ const (
 // base64, length) as opposed to values that fail authentication.
 var errInvalidCiphertext = errors.New("invalid encrypted value")
 
-// errSourceMissing marks a v2 value whose identity source is not readable on
-// this system any more.
+// errSourceMissing marks a v2/v3 value whose identity source is not readable
+// on this system any more.
 var errSourceMissing = errors.New("machine identity source not available")
 
 // keyState holds the lazily derived keys. All access is serialized by apiMu.
@@ -36,16 +38,26 @@ type keyState struct {
 	// hardwareIDFunc returns the legacy v1 hardware ID (default or override).
 	hardwareIDFunc func() (uint64, error)
 	// overridden is true when LoadConfig received a custom hardware-ID
-	// function; v2 then uses only the source "override".
+	// function; v2/v3 then use only the source "override".
 	overridden bool
 
 	v1Key []byte
 	v1Err error
 
-	v2Collected bool
-	v2Sources   map[string]string
-	v2Err       error
-	v2Keys      map[string][]byte // keyed by the comma-joined source names
+	// machine-wide identity sources (v2 + hostname, machtype) or "override"
+	srcCollected bool
+	srcMachine   map[string]string
+	srcErr       error
+
+	// fsid is the file system ID of the current config file ("" = none);
+	// knownFSIDs are all file system IDs seen in this process (current
+	// first), so that values of a file loaded before stay readable when
+	// another file is written (e.g. a backup on another drive).
+	fsid       string
+	knownFSIDs []string
+
+	// derived caches keys by format version, source names and values.
+	derived map[string][]byte
 }
 
 var keys keyState
@@ -53,6 +65,15 @@ var keys keyState
 // resetKeys clears all derived keys (tests, ResetForTest).
 func resetKeys() {
 	keys = keyState{}
+}
+
+// resetSources forgets the collected sources and derived keys (e.g. after
+// the key file changed); the legacy key and the fsid are kept.
+func resetSources() {
+	keys.srcCollected = false
+	keys.srcMachine = nil
+	keys.srcErr = nil
+	keys.derived = nil
 }
 
 // legacyKey returns the v1 key, deriving it on first use.
@@ -72,44 +93,87 @@ func legacyKey() ([]byte, error) {
 	return keys.v1Key, keys.v1Err
 }
 
-// machineSources returns the v2 identity sources of this system (plus the
-// optional key file), collecting them on first use.
+// setConfigFile selects the config file whose file system ID is used as
+// source "fsid" by the following encrypt and decrypt calls.
+func setConfigFile(path string) {
+	keys.fsid = ""
+	if keys.overridden {
+		return
+	}
+	keys.fsid = configFileSystemID(path)
+	if keys.fsid != "" {
+		keys.knownFSIDs = slices.DeleteFunc(keys.knownFSIDs, func(v string) bool { return v == keys.fsid })
+		keys.knownFSIDs = slices.Insert(keys.knownFSIDs, 0, keys.fsid)
+	}
+	if debugMode {
+		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] fsid of %s: %q\n", path, keys.fsid)
+	}
+}
+
+// machineSources returns all identity sources for new values: the
+// machine-wide sources (collected on first use), the fsid of the current
+// config file and the optional key file. The returned map is a copy.
 func machineSources() (map[string]string, error) {
-	if !keys.v2Collected {
-		keys.v2Collected = true
+	if !keys.srcCollected {
+		keys.srcCollected = true
 		if keys.overridden {
 			id, err := keys.hardwareIDFunc()
 			if err != nil {
-				keys.v2Err = fmt.Errorf("%s: %w", t("config.hardware_id_failed"), err)
+				keys.srcErr = fmt.Errorf("%s: %w", t("config.hardware_id_failed"), err)
 			} else {
-				keys.v2Sources = map[string]string{sourceOverride: strconv.FormatUint(id, 10)}
+				keys.srcMachine = map[string]string{sourceOverride: strconv.FormatUint(id, 10)}
 			}
 		} else {
-			keys.v2Sources, keys.v2Err = collectMachineSourcesV2()
-			if keys.v2Err != nil {
-				keys.v2Err = fmt.Errorf("%s: %w", t("config.hardware_id_failed"), keys.v2Err)
+			keys.srcMachine, keys.srcErr = collectMachineSourcesV3()
+			if keys.srcErr != nil {
+				keys.srcErr = fmt.Errorf("%s: %w", t("config.hardware_id_failed"), keys.srcErr)
 			}
 		}
-		if keys.v2Err == nil && settings.keyFileValue != "" {
-			keys.v2Sources[sourceKeyFile] = settings.keyFileValue
-		}
 		if debugMode {
-			printMachineSourcesV2(keys.v2Sources, keys.v2Err)
+			printMachineSources("v3, without fsid and keyfile", keys.srcMachine, keys.srcErr)
 		}
 	}
-	return keys.v2Sources, keys.v2Err
+	if keys.srcErr != nil {
+		return nil, keys.srcErr
+	}
+	sources := maps.Clone(keys.srcMachine)
+	if sources == nil {
+		sources = map[string]string{}
+	}
+	if keys.fsid != "" {
+		sources[sourceFSID] = keys.fsid
+	}
+	if settings.keyFileValue != "" {
+		sources[sourceKeyFile] = settings.keyFileValue
+	}
+	return sources, nil
 }
 
-// machineKey returns the v2 key for the given source names.
-func machineKey(names []string) ([]byte, error) {
-	cacheKey := strings.Join(names, ",")
-	if key, ok := keys.v2Keys[cacheKey]; ok {
-		return key, nil
-	}
+// candidateSources returns the source sets to try for a value with the given
+// source names: one set, or, if the value uses fsid, one set per known file
+// system ID (current config file first).
+func candidateSources(names []string) ([]map[string]string, error) {
 	sources, err := machineSources()
 	if err != nil {
 		return nil, err
 	}
+	if !slices.Contains(names, sourceFSID) || len(keys.knownFSIDs) == 0 {
+		return []map[string]string{sources}, nil
+	}
+	sets := make([]map[string]string, 0, len(keys.knownFSIDs))
+	for _, fsid := range keys.knownFSIDs {
+		set := maps.Clone(sources)
+		set[sourceFSID] = fsid
+		sets = append(sets, set)
+	}
+	return sets, nil
+}
+
+// sourceKey returns the key of format version ("v2" or "v3") for the given
+// source names, taking the values from sources.
+func sourceKey(version string, names []string, sources map[string]string) ([]byte, error) {
+	var cacheKey strings.Builder
+	cacheKey.WriteString(version)
 	used := make(map[string]string, len(names))
 	for _, name := range names {
 		value, ok := sources[name]
@@ -117,21 +181,40 @@ func machineKey(names []string) ([]byte, error) {
 			return nil, fmt.Errorf("%w: %s", errSourceMissing, t("config.v2_source_missing", name))
 		}
 		used[name] = value
+		cacheKey.WriteString("\x00" + name + "=" + value)
 	}
-	key, err := deriveKeyV2(used)
+	if key, ok := keys.derived[cacheKey.String()]; ok {
+		return key, nil
+	}
+	derive := deriveKeyV3
+	if version == "v2" {
+		derive = deriveKeyV2
+	}
+	key, err := derive(used)
 	if err != nil {
 		return nil, err
 	}
-	if keys.v2Keys == nil {
-		keys.v2Keys = map[string][]byte{}
+	if keys.derived == nil {
+		keys.derived = map[string][]byte{}
 	}
-	keys.v2Keys[cacheKey] = key
+	keys.derived[cacheKey.String()] = key
 	return key, nil
 }
 
 // isV2Value reports whether an encrypted value uses the v2 format.
 func isV2Value(value string) bool {
 	return strings.HasPrefix(value, v2Prefix)
+}
+
+// isV3Value reports whether an encrypted value uses the v3 format.
+func isV3Value(value string) bool {
+	return strings.HasPrefix(value, v3Prefix)
+}
+
+// isLegacyValue reports whether an encrypted value uses the legacy v1 format
+// (plain base64 without a version prefix).
+func isLegacyValue(value string) bool {
+	return !isV2Value(value) && !isV3Value(value)
 }
 
 // newGCM creates the AES-256-GCM AEAD for the given key.
@@ -143,7 +226,7 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// fieldAAD returns the additional authenticated data of a v2 value: the
+// fieldAAD returns the additional authenticated data of a v2/v3 value: the
 // password field prefix in lower case with only a-z and 0-9, so that Go
 // ("DatabaseSecurePassword") and PHP ("DATABASE_SECURE_PASSWORD") agree. A
 // value can therefore not be moved to a field with another name.
@@ -203,11 +286,15 @@ func openData(key, data, aad []byte) (string, error) {
 	return string(plaintext), nil
 }
 
-// needsUpgrade reports whether a v2 value was encrypted with fewer sources
-// than are available now (e.g. a key file was added); such values are
-// re-encrypted with all sources.
+// needsUpgrade reports whether a value should be re-encrypted with all
+// current sources: every v2 value (migration to v3) and v3 values that were
+// encrypted with fewer sources than are available now (e.g. a key file was
+// added).
 func needsUpgrade(value string) bool {
-	names, _, err := parseV2Value(value)
+	if isV2Value(value) {
+		return true
+	}
+	names, _, err := parseV3Value(value)
 	if err != nil {
 		return false
 	}
@@ -223,8 +310,8 @@ func needsUpgrade(value string) bool {
 	return true
 }
 
-// encrypt encrypts text for the password field `field` with the v2 key of all
-// currently available sources and returns the complete "v2:<names>:<base64>"
+// encrypt encrypts text for the password field `field` with the v3 key of all
+// currently available sources and returns the complete "v3:<names>:<base64>"
 // value.
 func encrypt(text, field string) (string, error) {
 	sources, err := machineSources()
@@ -235,7 +322,7 @@ func encrypt(text, field string) (string, error) {
 		return "", fmt.Errorf("%s: %w", t("config.hardware_id_failed"), errNoMachineSource)
 	}
 	names := sortedSourceNames(sources)
-	key, err := machineKey(names)
+	key, err := sourceKey("v3", names, sources)
 	if err != nil {
 		return "", err
 	}
@@ -243,28 +330,35 @@ func encrypt(text, field string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return v2Prefix + strings.Join(names, ",") + ":" + b64, nil
+	return v3Prefix + strings.Join(names, ",") + ":" + b64, nil
 }
 
-// decrypt decrypts a v2 value of the password field `field` or a legacy v1
-// value (plain base64, no field binding). The value is validated and decoded
-// exactly once, before any key is derived, so that a malformed value is always
-// reported as errInvalidCiphertext. With SetRejectLegacy(true) v1 values are
-// refused.
+// decrypt decrypts a v3 or v2 value of the password field `field` or a legacy
+// v1 value (plain base64, no field binding). The value is validated and
+// decoded exactly once, before any key is derived, so that a malformed value
+// is always reported as errInvalidCiphertext. With SetRejectLegacy(true) v1
+// values are refused.
 func decrypt(value, field string) (string, error) {
+	version := ""
 	b64 := value
 	var names []string
-	if isV2Value(value) {
-		var err error
-		if names, b64, err = parseV2Value(value); err != nil {
-			return "", err
-		}
+	var err error
+	switch {
+	case isV3Value(value):
+		version = "v3"
+		names, b64, err = parseV3Value(value)
+	case isV2Value(value):
+		version = "v2"
+		names, b64, err = parseV2Value(value)
+	}
+	if err != nil {
+		return "", err
 	}
 	data, err := decodeCiphertextB64(b64)
 	if err != nil {
 		return "", err
 	}
-	if names == nil {
+	if version == "" {
 		if settings.rejectLegacy {
 			return "", errors.New(t("config.legacy_rejected"))
 		}
@@ -274,9 +368,24 @@ func decrypt(value, field string) (string, error) {
 		}
 		return openData(key, data, nil)
 	}
-	key, err := machineKey(names)
+	sets, err := candidateSources(names)
 	if err != nil {
 		return "", err
 	}
-	return openData(key, data, fieldAAD(field))
+	var lastErr error
+	for _, sources := range sets {
+		key, err := sourceKey(version, names, sources)
+		if err != nil {
+			return "", err
+		}
+		plain, err := openData(key, data, fieldAAD(field))
+		if err == nil {
+			return plain, nil
+		}
+		lastErr = err
+	}
+	if version == "v3" {
+		return "", fmt.Errorf("%w (%s)", lastErr, t("config.v3_key_mismatch"))
+	}
+	return "", lastErr
 }

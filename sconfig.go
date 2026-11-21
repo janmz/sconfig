@@ -7,12 +7,13 @@ package sconfig
  * Design goal: the encryption key is intentionally neither random nor new per
  * call. The same machine must always derive the same key so that stored
  * config or .env data stays readable. The key is derived deterministically
- * from machine-bound data (see hwid_v2.go) that only this machine can
+ * from machine-bound data (see hwid_v3.go) that only this machine can
  * reproduce; it cannot be guessed without access to the machine.
  *
  * Version: see version.go
  *
  * ChangeLog:
+ *  21.11.26	3.1.0	Feature: v3 key format (additional sources hostname, machtype and fsid of the config file), automatic migration of v1 and v2 values
  *  27.10.26	3.0.0	Feature: v2 key format (HKDF, stable machine sources, source list per value), automatic migration of v1 values, pointer/map/array support, atomic writes
  *  10.10.26	2.0.8	Feature: Allow config files in %USERPROFILE% or ~
  *  24.06.26	2.0.5	Fix: second try to handle empty composer.lock
@@ -47,12 +48,15 @@ package sconfig
  * - UpdateConfig(): Writes the config struct to a file; requires LoadConfig to
  *   have been called first. Secure fields are encrypted in the file unless
  *   cleanConfig is true. The path may differ from the one used in LoadConfig.
- * - DebugHardwareID(): Prints the legacy hardware ID and the v2 machine
+ * - DebugHardwareID(): Prints the legacy hardware ID and the v3 machine
  *   identity with all inputs to stderr.
  * - SetLocalesDir(): Loads additional translations from a directory.
  *
  * Files:
- * - hwid_v2.go: machine identity and key derivation for new values (v2)
+ * - hwid_v3.go, fsid_*.go: machine identity and key derivation for new
+ *   values (v3)
+ * - hwid_v2.go: v2 sources and key derivation (frozen, read and migrate;
+ *   its sources are part of v3)
  * - hwid_v1.go, key_rand_go123.go: frozen legacy hardware ID (v1, read only)
  * - keys.go: key cache, encryption and decryption
  * - walk.go: struct traversal, default values, password pairs
@@ -303,16 +307,30 @@ func writeDebugLog(hardwareID uint64, identifiers string, onlyOnInit bool) {
 }
 
 // DebugHardwareID computes the legacy hardware ID (v1) and the machine
-// identity (v2) and prints all intermediate results to stderr (VM detection,
-// MAC source, identifiers, hash, v2 sources). Run it when passwords no longer
-// decrypt and compare the output with a run on a working system. It returns
-// the legacy v1 hardware ID.
-func DebugHardwareID() (uint64, error) {
+// identity (v3) and prints all intermediate results to stderr (VM detection,
+// MAC source, identifiers, hash, v3 sources). The optional configPath selects
+// the file whose file system ID is shown as source "fsid" (default: the
+// current working directory). Run it when passwords no longer decrypt and
+// compare the output with a run on a working system. It returns the legacy
+// v1 hardware ID.
+func DebugHardwareID(configPath ...string) (uint64, error) {
 	apiMu.Lock()
 	defer apiMu.Unlock()
 	id, err := secure_config_getHardwareID_debug(true)
-	sources, srcErr := collectMachineSourcesV2()
-	printMachineSourcesV2(sources, srcErr)
+	sources, srcErr := collectMachineSourcesV3()
+	if srcErr == nil {
+		path := "."
+		if len(configPath) > 0 && configPath[0] != "" {
+			path = configPath[0]
+		}
+		if abs, absErr := filepath.Abs(path); absErr == nil {
+			path = abs
+		}
+		if fsid := configFileSystemID(path); fsid != "" {
+			sources[sourceFSID] = fsid
+		}
+	}
+	printMachineSources("v3", sources, srcErr)
 	return id, err
 }
 
@@ -332,9 +350,10 @@ func DebugHardwareID() (uint64, error) {
 //   - Fields named `<Name>Password` and `<Name>SecurePassword` are treated as a
 //     pair (in nested structs, pointers, slices, arrays and maps as well). If
 //     the plaintext password differs from the recognized marker, it is
-//     encrypted into `<Name>SecurePassword` (v2 format) and the plaintext
-//     field is replaced by the marker string. Legacy v1 values are migrated
-//     to v2 automatically.
+//     encrypted into `<Name>SecurePassword` (v3 format) and the plaintext
+//     field is replaced by the marker string. Legacy v1 and v2 values are
+//     migrated to v3 automatically. v3 values are bound to the machine, its
+//     host name and the file system of the config file.
 //   - When `cleanConfig` is true, the function writes back a config file where
 //     passwords are present as plaintext (use with care), primarily for
 //     migration or inspection purposes.
@@ -346,8 +365,8 @@ func DebugHardwareID() (uint64, error) {
 //     for the analysis; keep it off in normal operation (sensitive data).
 //
 // The optional `getHardwareID_func` replaces the machine identity (intended
-// for tests): its value is used as legacy hardware ID and as the only v2
-// source "override". The key state is set by the first call and kept until
+// for tests): its value is used as legacy hardware ID and as the only v3
+// source "override" (no hostname, machtype or fsid). The key state is set by the first call and kept until
 // ResetForTest.
 func LoadConfig(config interface{}, version int, path string, cleanConfig bool, debugOutput bool, getHardwareID_func ...func() (uint64, error)) error {
 	apiMu.Lock()
@@ -367,6 +386,7 @@ func LoadConfig(config interface{}, version int, path string, cleanConfig bool, 
 		hardwareIDFunc = getHardwareID_func[0]
 	}
 	config_init(hardwareIDFunc, debugOutput)
+	setConfigFile(path)
 
 	writeMode := configFileMode(path)
 	file := []byte("{}")
@@ -439,6 +459,7 @@ func UpdateConfig(config interface{}, path string, cleanConfig ...bool) error {
 	if !keys.initialized {
 		return fmt.Errorf("%s", t("config.load_first"))
 	}
+	setConfigFile(path)
 	configValue, err := configStruct(config)
 	if err != nil {
 		return err

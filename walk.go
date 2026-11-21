@@ -401,10 +401,11 @@ type migrationStats struct {
 	failed   int
 }
 
-// encryptPasswords encrypts new plaintext passwords (v2), migrates legacy v1
-// values to v2 and re-encrypts v2 values that use fewer sources than are
-// available now. *changed is set when the file must be written. Warnings are
-// issued for migrated values (rotate passwords) and failed migrations.
+// encryptPasswords encrypts new plaintext passwords (v3), migrates legacy v1
+// and v2 values to v3 and re-encrypts v3 values that use fewer sources than
+// are available now. *changed is set when the file must be written. Warnings
+// are issued for migrated legacy v1 values (rotate passwords) and failed v1
+// migrations; v2 values are migrated silently.
 func encryptPasswords(v reflect.Value, changed *bool) error {
 	var stats migrationStats
 	err := walkStructs(v, func(s reflect.Value) error {
@@ -414,7 +415,7 @@ func encryptPasswords(v reflect.Value, changed *bool) error {
 				if secureVal == "" {
 					return passwordPairError(prefix, "config.secure_password_missing")
 				}
-				if !isV2Value(secureVal) {
+				if isLegacyValue(secureVal) {
 					return reencryptValue(prefix, secure, changed, &stats, true)
 				}
 				if needsUpgrade(secureVal) {
@@ -447,7 +448,7 @@ func encryptPasswords(v reflect.Value, changed *bool) error {
 	return nil
 }
 
-// reencryptValue decrypts a value and encrypts it again with all current v2
+// reencryptValue decrypts a value and encrypts it again with all current v3
 // sources. If that is not possible, the readable old value is kept; for
 // legacy values this is counted as failed migration.
 func reencryptValue(prefix string, secure reflect.Value, changed *bool, stats *migrationStats, legacy bool) error {

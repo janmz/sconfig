@@ -72,7 +72,7 @@ func TestKAT_V2Key(ts *testing.T) {
 }
 
 // TestLegacyValueIsMigrated loads a config written by version 2.0.8.62 and
-// checks that it decrypts and is rewritten in the v2 format.
+// checks that it decrypts and is rewritten in the v3 format.
 func TestLegacyValueIsMigrated(ts *testing.T) {
 	ResetForTest()
 	defer ResetForTest()
@@ -94,8 +94,8 @@ func TestLegacyValueIsMigrated(ts *testing.T) {
 	if err := json.Unmarshal(raw, &onDisk); err != nil {
 		ts.Fatal(err)
 	}
-	if !strings.HasPrefix(onDisk.DatabaseSecurePassword, "v2:override:") {
-		ts.Fatalf("expected migrated v2 value, got %q", onDisk.DatabaseSecurePassword)
+	if !strings.HasPrefix(onDisk.DatabaseSecurePassword, "v3:override:") {
+		ts.Fatalf("expected migrated v3 value, got %q", onDisk.DatabaseSecurePassword)
 	}
 	cfg2 := &TestConfig{}
 	if err := LoadConfig(cfg2, 1, path, false, false); err != nil {
@@ -524,7 +524,7 @@ func TestKeyFileAndUpgrade(ts *testing.T) {
 		ts.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "v2:keyfile,override:") {
+	if !strings.Contains(string(raw), "v3:keyfile,override:") {
 		ts.Fatalf("value not upgraded to the key file: %s", raw)
 	}
 	// Without the key file the value cannot be decrypted any more.

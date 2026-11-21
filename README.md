@@ -88,6 +88,21 @@ What changes for applications:
   values with line breaks; `updateEnv()` no longer writes values of the
   process environment.
 
+## Upgrading to 3.1 (key format v3)
+
+Version 3.1.0 keeps the API (Go module `github.com/janmz/sconfig/v3`,
+Composer `^3.0`) but introduces the key format v3:
+
+- New values and all existing v1 and v2 values are written as v3 on the
+  next load. sconfig 3.0.x cannot read v3 values – update all programs that
+  share a config file at the same time.
+- v3 values are additionally bound to the host name, the architecture and
+  the file system of the config file. Renaming the computer, recreating a
+  container without a fixed host name or moving the config file to another
+  drive makes them unreadable, see
+  [Pros and cons of the v3 sources](#pros-and-cons-of-the-v3-sources).
+- Go: `DebugHardwareID` accepts an optional config path (for `fsid`).
+
 ## Go Version
 
 ### Features
@@ -247,7 +262,8 @@ The encrypted passwords are machine-bound (derived from system identifiers,
 see [How the hardware ID is created](#how-the-hardware-id-is-created)),
 making them unusable on other systems. Values encrypted by the PHP version
 can be decrypted by the Go version on the same machine and vice versa (v2
-format; legacy v1 values are not interchangeable).
+and v3 formats, v3 on the same file system; legacy v1 values are not
+interchangeable).
 
 #### `.env` paths
 
@@ -451,18 +467,113 @@ See [PHP Internationalization](#php-internationalization) section above.
 
 Every encrypted value starts with its format:
 
-- `v2:<sources>:<base64>` – current format, written by Go and PHP since
-  version 3.0.0.
-- plain base64 without prefix – legacy format v1 (before 3.0.0). It is still
-  readable and is rewritten as v2 automatically by the next `LoadConfig` or
+- `v3:<sources>:<base64>` – current format, written by Go and PHP since
+  version 3.1.0.
+- `v2:<sources>:<base64>` – format of version 3.0.x. It is still readable
+  and is rewritten as v3 automatically by the next `LoadConfig` or
   `EnvLoader::load()`.
+- plain base64 without prefix – legacy format v1 (before 3.0.0). It is still
+  readable and is rewritten as v3 automatically, too.
 
-### Current format v2 (identical in Go and PHP)
+### Current format v3 (identical in Go and PHP)
+
+Since version 3.1.0 new values use v3. v3 uses all v2 sources (see
+[Format v2](#format-v2-300-read-and-migrate) below: Sources, Normalization,
+Options apply unchanged) plus three sources that exist on every system,
+also in VMs and containers:
+
+#### Additional sources
+
+- `hostname`: host name of the operating system – Go `os.Hostname()`, PHP
+  `gethostname()` (Windows: DNS host name, not the NetBIOS name, which is
+  cut to 15 characters; Linux: kernel host name). No external command and
+  no DNS lookup (`hostname -f` is not used: the FQDN depends on DNS,
+  `/etc/hosts` and the network and can hang without network).
+  Normalization: trimmed, `A-Z` converted to lower case, 1–255 printable
+  ASCII characters; `localhost` and `localhost.localdomain` are ignored.
+- `machtype`: native machine architecture, normalized to `amd64`, `arm64`,
+  `386`, `arm` or the raw value (`a-z`, `0-9`, `_`, e.g. `riscv64`):
+  - Windows: `PROCESSOR_ARCHITECTURE` of the system environment
+    (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`,
+    64-bit view) – not the value of the process, which differs for 32-bit
+    or emulated processes.
+  - macOS: `arm64` if `sysctl -n hw.optional.arm64` is `1` (also correct
+    under Rosetta), otherwise `uname -m`.
+  - Linux, FreeBSD and others: `uname -m` (PHP `php_uname('m')`).
+- `fsid`: ID of the file system that holds the config file (if it does not
+  exist yet: its nearest existing directory). Lower-case hex without leading
+  zeros; `0` is ignored.
+  - Windows: volume serial number (Go `GetFileInformationByHandle`, PHP
+    `stat()['dev']`; `vol` shows it as `EA5D-C109`).
+  - Linux: `statfs` `f_fsid` as `val[0]<<32 | val[1]` (Go `syscall.Statfs`,
+    PHP `stat -f -c %i`; GNU coreutils and busybox print the same value).
+  - macOS, FreeBSD and others: `st_dev` of `stat()` (macOS: lower 32 bits).
+    `stat -f` is not used there: on BSD systems it selects the output
+    format, not the file system.
+
+  The file system of the config file is used instead of the one of the
+  executable, so that Go programs and PHP (whose executable is `php`)
+  derive the same key for files on the same file system.
+
+With a hardware-ID override (tests) the only source is still
+`override=<number>`.
+
+#### Key and stored value (v3)
+
+As in v2 (input keying material, AES-256-GCM, field binding, source list),
+but HKDF uses salt `sconfig-v3` and info `sconfig v3 aes-256-gcm`, and the
+stored value starts with `v3:`, e.g.
+`v3:fsid,hostname,machineguid,machtype,smbiosuuid:PW3g…`.
+
+If a v3 value does not decrypt, the error says that the computer may have
+been renamed or the config file moved to another file system
+(`config.v3_key_mismatch`). Within one process, values of a file loaded
+before stay readable when another file is written, e.g. a backup on another
+drive with `UpdateConfig` / `updateEnv()`; that file gets its own `fsid`.
+
+#### Migration of v2 values
+
+On load, each v2 value is decrypted, encrypted as v3 and the file is
+rewritten – without a warning, because v2 is not weak. If the v2 value
+cannot be decrypted (missing source), loading fails as before. v1 values
+are migrated directly to v3 (with the warning to rotate the passwords).
+sconfig 3.0.x cannot read v3 values: update all programs that share a
+config file at the same time.
+
+#### Pros and cons of the v3 sources
+
+- **Pro:** an attacker who only has the config file must also know host
+  name, architecture and file system ID. Cloned VMs, which often share
+  `machine-id` or SMBIOS UUID, get different keys through the host name.
+  Copying the config file to another drive or machine makes it unreadable.
+- **Con – host name:** renaming the computer makes all values unreadable.
+  In Docker the host name is the container ID (unless `--hostname` is set),
+  in Kubernetes the pod name – a new container cannot read the values.
+- **Con – fsid:** moving the config file to another partition or drive,
+  reformatting, and – on Linux – a changed device number for file systems
+  whose `f_fsid` depends on it (XFS, after reordering disks or LVM changes)
+  make the values unreadable. In containers the overlay root file system
+  gets a new ID for every container; keep the config file on a volume.
+- **Con – machtype:** only a few possible values, so it adds almost no
+  protection against guessing; it is stable.
+- Without any v2 source (e.g. containers without `/etc/machine-id`) only
+  `hostname`, `machtype` and `fsid` are left: weak protection, use a key
+  file there.
+
+Before renaming a computer or moving the config file, write it once with
+plaintext passwords (`cleanConfig`) and let it be encrypted again
+afterwards.
+
+### Format v2 (3.0.0, read and migrate)
+
+Values with the prefix `v2:` were written by 3.0.x. All v2 sources are
+also v3 sources, so the sources, the normalization and the options below
+apply to v3 as well.
 
 The name "hardware ID" is historical. v2 uses machine identity sources that
 are stable and readable without administrator rights. MAC addresses, network
-routes, `ipconfig`, `wmic`, disk/CPU/mainboard serials, VM detection, the
-host name and the PHP version are no longer used.
+routes, `ipconfig`, `wmic`, disk/CPU/mainboard serials, VM detection and
+the PHP version are no longer used (the host name is a v3 source again).
 
 #### Sources
 
@@ -483,8 +594,9 @@ host name and the PHP version are no longer used.
 - **FreeBSD:** `hostuuid` – output of `/sbin/sysctl -n kern.hostuuid`.
 - **Optional key file:** `keyfile` – hex of a secret file, see
   [Options](#options).
-- **Other systems:** no source; encrypting fails with
-  `config.hardware_id_failed` (there is no fallback).
+- **Other systems:** no v2 source; v3 still has `hostname`, `machtype`
+  and `fsid` (weak, use a key file). Without any source encrypting fails
+  with `config.hardware_id_failed` (there is no fallback).
 - **Tests:** with a hardware-ID override (`getHardwareID_func` of
   `LoadConfig`, `EnvLoader::setHardwareIdForTest()`) the only source is
   `override=<number>`.
@@ -544,8 +656,8 @@ file) are re-encrypted with all sources on the next load.
 
 #### Migration of v1 values
 
-On load, each v1 value is decrypted with the legacy key, encrypted as v2 and
-the file is rewritten. If no v2 source is available, the v1 value is kept.
+On load, each v1 value is decrypted with the legacy key, encrypted as v3 and
+the file is rewritten. If no source is available, the v1 value is kept.
 Backups made before the migration still contain v1 values, whose key space
 is small (see below) – rotate passwords if such copies may have leaked.
 
@@ -713,7 +825,7 @@ AES-256-GCM key.
 Identifiers, order, MAC format, byte order, key expansion and ciphertext
 layout differ (Go v1: `nonce | ciphertext | tag`, PHP v1:
 `iv | tag | ciphertext`). v1 values of one implementation cannot be decrypted
-by the other. v2 values are fully compatible.
+by the other. v2 and v3 values are fully compatible.
 
 #### Hardware and weaknesses of v1
 
@@ -744,7 +856,14 @@ the same machine), the following can help.
 
 ### Why the key can change
 
-v2 values (see [Sources](#sources)) only change when a source changes:
+v2 and v3 values (see [Sources](#sources) and
+[Additional sources](#additional-sources)) only change when a source
+changes:
+
+- **v3 only:** computer renamed (`hostname`; in Docker: new container
+  without `--hostname`), config file moved to another drive, partition or
+  file system, file system reformatted (`fsid`). The error then contains
+  `config.v3_key_mismatch`.
 
 - **Windows:** Windows reinstalled or Sysprep (new `MachineGuid`), mainboard
   replaced, firmware or hypervisor changed the SMBIOS UUID. If PowerShell is
@@ -755,8 +874,8 @@ v2 values (see [Sources](#sources)) only change when a source changes:
 - **macOS / FreeBSD:** logic board replaced / new `kern.hostuuid`.
 
 Network changes, USB drives, `wmic`, VM detection and process rights no
-longer affect v2. Legacy v1 values (until they are migrated) still depend on
-the v1 identifiers:
+longer affect v2 and v3. Legacy v1 values (until they are migrated) still
+depend on the v1 identifiers:
 
 - **Network:** Windows (Go): another adapter has a gateway line or is listed
   last (VPN on/off, Wi‑Fi vs. Ethernet, Hyper-V/VirtualBox adapters), or
@@ -777,8 +896,8 @@ the v1 identifiers:
 1. **Print current hardware ID and all inputs (no config file needed):**
 
    ```go
-   id, err := sconfig.DebugHardwareID()
-   // Legacy v1 identifiers, the v1 ID and the v2 sources go to stderr.
+   id, err := sconfig.DebugHardwareID("config.json") // path optional (fsid)
+   // Legacy v1 identifiers, the v1 ID and the v3 sources go to stderr.
    ```
 
 2. **Or** call `LoadConfig` with debug on:
@@ -791,7 +910,7 @@ the v1 identifiers:
 
 3. Run once when the key is "wrong" and save stderr. Compare with a run when
    the key was "right" (or on another machine). The `[sconfig DEBUG]` lines
-   show the v2 sources (`name=value`) and, for legacy values, VM detection,
+   show the v3 sources (`name=value`) and, for legacy values, VM detection,
    the MAC and every v1 identifier; the differing line(s) are the cause.
 
 4. **Hardware-ID track** (v1): When debug is on, each v1 computation and
@@ -810,7 +929,7 @@ the v1 identifiers:
   machine (backups, repositories, tickets). Every process on the machine can
   read the sources and therefore derive the key.
 - **Legacy values**: v1 values have a small key space (about 2^31 / 2^32) and
-  are migrated to v2 on load. Rotate passwords if old copies may have leaked.
+  are migrated to v3 on load. Rotate passwords if old copies may have leaked.
 - **Transparent decryption**: Passwords are automatically decrypted in memory
   for easy access
 - **Use `cleanConfig` with care**: Setting `cleanConfig = true` writes

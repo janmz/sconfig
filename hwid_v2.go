@@ -191,6 +191,13 @@ func sortedSourceNames(sources map[string]string) []string {
 
 // deriveKeyV2 derives the AES-256 key from the given sources (all of them).
 func deriveKeyV2(sources map[string]string) ([]byte, error) {
+	return deriveKeyHKDF(sources, v2KDFSalt, v2KDFInfo)
+}
+
+// deriveKeyHKDF derives a 32-byte key with HKDF-SHA256 from the sources
+// ("<name>=<value>\n" sorted by name) and the given salt and info. It is
+// shared by v2 and v3, which differ only in salt and info.
+func deriveKeyHKDF(sources map[string]string, salt, info string) ([]byte, error) {
 	if len(sources) == 0 {
 		return nil, errNoMachineSource
 	}
@@ -201,15 +208,23 @@ func deriveKeyV2(sources map[string]string) ([]byte, error) {
 		ikm.WriteString(sources[name])
 		ikm.WriteByte('\n')
 	}
-	return hkdf.Key(sha256.New, []byte(ikm.String()), []byte(v2KDFSalt), v2KDFInfo, v2KeyBytes)
+	return hkdf.Key(sha256.New, []byte(ikm.String()), []byte(salt), info, v2KeyBytes)
 }
 
 // parseV2Value splits "v2:<names>:<base64>" into the source names and the
 // base64 part.
 func parseV2Value(value string) ([]string, string, error) {
-	parts := strings.SplitN(strings.TrimPrefix(value, v2Prefix), ":", 2)
+	return parseSourceValue(value, v2Prefix)
+}
+
+// parseSourceValue splits "<prefix><names>:<base64>" (v2 and v3) into the
+// source names and the base64 part. The names must be valid, strictly
+// ascending and limited in number and length.
+func parseSourceValue(value, prefix string) ([]string, string, error) {
+	version := strings.TrimSuffix(prefix, ":")
+	parts := strings.SplitN(strings.TrimPrefix(value, prefix), ":", 2)
 	if len(parts) != 2 || parts[0] == "" {
-		return nil, "", fmt.Errorf("%w: malformed v2 value", errInvalidCiphertext)
+		return nil, "", fmt.Errorf("%w: malformed %s value", errInvalidCiphertext, version)
 	}
 	if len(parts[0]) > v2MaxNamesLength {
 		return nil, "", fmt.Errorf("%w: source list too long", errInvalidCiphertext)
@@ -228,25 +243,4 @@ func parseV2Value(value string) ([]string, string, error) {
 		}
 	}
 	return names, parts[1], nil
-}
-
-// printMachineSourcesV2 writes the v2 sources to stderr (debug only).
-func printMachineSourcesV2(sources map[string]string, err error) {
-	fmt.Fprintf(os.Stderr, "[sconfig DEBUG] ========================================\n")
-	fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Machine identity (v2)\n")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] v2 sources failed: %v\n", err)
-		return
-	}
-	if len(sources) == 0 {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] v2 sources: none available\n")
-		return
-	}
-	for _, name := range sortedSourceNames(sources) {
-		value := sources[name]
-		if name == sourceKeyFile {
-			value = "(secret, not shown)"
-		}
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG]   %s=%s\n", name, value)
-	}
 }

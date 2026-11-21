@@ -998,9 +998,9 @@ func TestCiphertextIntegrity(ts *testing.T) {
 	if err := json.Unmarshal(raw, &onDisk); err != nil {
 		ts.Fatalf("unmarshal config: %v", err)
 	}
-	names, cipherB64, err := parseV2Value(onDisk.DatabaseSecurePassword)
+	names, cipherB64, err := parseV3Value(onDisk.DatabaseSecurePassword)
 	if err != nil {
-		ts.Fatalf("DatabaseSecurePassword is not a v2 value: %v (%q)", err, onDisk.DatabaseSecurePassword)
+		ts.Fatalf("DatabaseSecurePassword is not a v3 value: %v (%q)", err, onDisk.DatabaseSecurePassword)
 	}
 	if len(names) != 1 || names[0] != sourceOverride {
 		ts.Errorf("expected source list [override], got %v", names)
@@ -1102,8 +1102,7 @@ func BenchmarkLoadConfig_Simple(b *testing.B) {
 	tempDir := testExeRoot(b)
 	configPath := filepath.Join(tempDir, "benchmark_config.json")
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		config := &TestConfig{
 			DatabasePassword: "benchmark-password",
 			APIKey:           "benchmark-api-key",
@@ -1134,8 +1133,7 @@ func BenchmarkLoadConfig_WithExistingFile(b *testing.B) {
 	configData, _ := json.MarshalIndent(existingConfig, "", "  ")
 	os.WriteFile(configPath, configData, 0644)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		config := &TestConfig{}
 		err := LoadConfig(config, 2, configPath, false, false)
 		if err != nil {
