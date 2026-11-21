@@ -2,6 +2,46 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.1.0.66] - 2026-11-21 13:05:51
+
+Schlüsselformat v3 mit zusätzlichen Identitätsquellen (Go und PHP
+identisch, gemeinsame Testvektoren).
+
+### Added
+
+- **Go & PHP:** Format `v3:<quellen>:<base64>` (HKDF-SHA256, Salt
+  `sconfig-v3`, Info `sconfig v3 aes-256-gcm`) für alle neuen Werte. Es nutzt
+  alle v2-Quellen und zusätzlich:
+  - `hostname` – Rechnername (Go `os.Hostname`, PHP `gethostname`; ohne
+    DNS, d. h. nicht `hostname -f`), kleingeschrieben, `localhost` ignoriert;
+  - `machtype` – native Architektur, normalisiert (`amd64`, `arm64`, `386`,
+    `arm`, …): Windows Registry-Systemwert `PROCESSOR_ARCHITECTURE`, macOS
+    `hw.optional.arm64` (korrekt unter Rosetta), sonst `uname -m`;
+  - `fsid` – ID des Dateisystems der Konfigurationsdatei: Windows
+    Volume-Seriennummer, Linux `statfs f_fsid` (= `stat -f -c %i`, mit GNU
+    coreutils und busybox geprüft), sonst `st_dev`. Es wird das Dateisystem
+    der Konfigurationsdatei statt des Programms verwendet, damit Go und PHP
+    gleiche Schlüssel ableiten.
+- **Go & PHP:** Hinweis `config.v3_key_mismatch` (Rechner umbenannt oder
+  Datei verschoben?), wenn ein v3-Wert nicht entschlüsselt werden kann.
+- **Go:** `DebugHardwareID(configPath ...string)` zeigt die v3-Quellen inkl.
+  `fsid`.
+- **Tests:** Known-Answer-Tests für v3 (`sconfig_v3_test.go`,
+  `php/tests/EnvLoaderV3Test.php`), Go↔PHP-Kreuztest, Bindung an Hostname
+  und Dateisystem, Migration v2 → v3.
+
+### Changed
+
+- **Go & PHP:** v1- und v2-Werte werden beim Laden automatisch nach v3
+  migriert (v2 ohne Warnung). sconfig 3.0.x kann v3-Werte nicht lesen.
+- **Go & PHP:** Werte einer im Prozess bereits geladenen Datei bleiben beim
+  Schreiben einer anderen Datei (Backup auf anderem Laufwerk) lesbar.
+- **Doku:** README.md, README.de.md und php/README.md: Abschnitt „Upgrading
+  to 3.1“ / „Upgrade auf 3.1“, Format v3 mit Vor- und Nachteilen der neuen
+  Quellen, Debug-Hinweise.
+
+---
+
 ## [3.0.0.65] - 2026-10-29
 
 Release der Änderungen aus 2.1.0.63 und 2.1.0.64 als neue Hauptversion
