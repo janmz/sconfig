@@ -488,10 +488,16 @@ func decryptError(prefix string, err error) error {
 }
 
 // decodePasswords decrypts all secure password fields into their plaintext
-// fields so that the encryption is transparent for the application.
+// fields so that the encryption is transparent for the application. A
+// plaintext field that already holds a password (not the marker) is kept:
+// it is the current value in memory, e.g. when UpdateConfig writes a clean
+// copy to another file system, whose fsid would not match the old value.
 func decodePasswords(v reflect.Value) error {
 	return walkStructs(v, func(s reflect.Value) error {
 		return forEachPasswordPair(s, func(prefix string, secure, plain reflect.Value) error {
+			if p := plain.String(); p != "" && !isPasswordMarker(p) {
+				return nil
+			}
 			secureVal := secure.String()
 			if secureVal == "" {
 				if isPasswordMarker(plain.String()) {

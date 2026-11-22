@@ -171,11 +171,15 @@ func TestCollectMachineSourcesV3(ts *testing.T) {
 	ts.Logf("v3 sources on this system: %v, fsid %s", sortedSourceNames(sources), fsid)
 }
 
-// TestV3BindsHostnameAndFileSystem uses the real machine sources with a
-// replaced host name and file system ID.
+// TestV3BindsHostnameAndFileSystem uses a fixed machine-id, a replaced host
+// name and file system ID and the real machine type.
 func TestV3BindsHostnameAndFileSystem(ts *testing.T) {
 	ResetForTest()
-	origHost, origFS := hostnameFunc, fileSystemIDFunc
+	origHost, origFS, origV2 := hostnameFunc, fileSystemIDFunc, machineSourcesV2Func
+	// fixed strong source, so the test also runs in containers without one
+	machineSourcesV2Func = func() (map[string]string, error) {
+		return map[string]string{sourceMachineID: "0123456789abcdef0123456789abcdef"}, nil
+	}
 	host := "host-a"
 	fsids := map[string]uint64{}
 	hostnameFunc = func() (string, error) { return host, nil }
@@ -188,7 +192,7 @@ func TestV3BindsHostnameAndFileSystem(ts *testing.T) {
 		return 0xaaa, nil
 	}
 	defer func() {
-		hostnameFunc, fileSystemIDFunc = origHost, origFS
+		hostnameFunc, fileSystemIDFunc, machineSourcesV2Func = origHost, origFS, origV2
 		ResetForTest()
 	}()
 	dir := testExeRoot(ts)
@@ -246,5 +250,122 @@ func TestV3BindsHostnameAndFileSystem(ts *testing.T) {
 	loaded := &TestConfig{}
 	if err := LoadConfig(loaded, 1, path, false, false); err != nil || loaded.DatabasePassword != "bound-secret" {
 		ts.Fatalf("original identity must decrypt again: %q %v", loaded.DatabasePassword, err)
+	}
+}
+
+// withIdentityHooks replaces host name, file system ID and the v2 sources
+// for one test and restores them afterwards.
+func withIdentityHooks(ts *testing.T, host *string, fsid *uint64, v2 map[string]string) {
+	origHost, origFS, origV2 := hostnameFunc, fileSystemIDFunc, machineSourcesV2Func
+	hostnameFunc = func() (string, error) { return *host, nil }
+	fileSystemIDFunc = func(string) (uint64, error) { return *fsid, nil }
+	machineSourcesV2Func = func() (map[string]string, error) {
+		out := map[string]string{}
+		for k, v := range v2 {
+			out[k] = v
+		}
+		return out, nil
+	}
+	ts.Cleanup(func() {
+		hostnameFunc, fileSystemIDFunc, machineSourcesV2Func = origHost, origFS, origV2
+		SetAllowWeakIdentity(false)
+		SetUseHostname(true)
+		SetUseFileSystemID(true)
+		SetWarningHandler(nil)
+		_ = SetKeyFile("")
+		ResetForTest()
+	})
+}
+
+// TestWeakIdentityIsRefused checks SA-17: without a strong source new values
+// are refused unless a weak identity is allowed explicitly.
+func TestWeakIdentityIsRefused(ts *testing.T) {
+	ResetForTest()
+	host, fsid := "container-1", uint64(0xabc)
+	withIdentityHooks(ts, &host, &fsid, nil)
+	var warnings []string
+	SetWarningHandler(func(m string) { warnings = append(warnings, m) })
+	dir := testExeRoot(ts)
+	path := filepath.Join(dir, "weak.json")
+	err := LoadConfig(&TestConfig{DatabasePassword: "x"}, 1, path, false, false)
+	if err == nil || !strings.Contains(err.Error(), t("config.weak_identity")) {
+		ts.Fatalf("expected the weak identity error, got %v", err)
+	}
+	SetAllowWeakIdentity(true)
+	ResetForTest()
+	if err := LoadConfig(&TestConfig{DatabasePassword: "x"}, 1, path, false, false); err != nil {
+		ts.Fatalf("weak identity must work after opt-in: %v", err)
+	}
+	if err := UpdateConfig(&TestConfig{DatabasePassword: "y"}, path); err != nil {
+		ts.Fatal(err)
+	}
+	if len(warnings) != 1 || warnings[0] != t("config.warn_weak_identity") {
+		ts.Errorf("expected exactly one weak identity warning, got %q", warnings)
+	}
+	// a key file is a strong source
+	SetAllowWeakIdentity(false)
+	if err := SetKeyFile(filepath.Join(dir, "weak.key")); err != nil {
+		ts.Fatal(err)
+	}
+	ResetForTest()
+	if err := LoadConfig(&TestConfig{DatabasePassword: "z"}, 1, filepath.Join(dir, "keyfile.json"), false, false); err != nil {
+		ts.Fatalf("a key file must count as strong source: %v", err)
+	}
+}
+
+// TestExcludedSourcesAreRemoved checks SA-25: SetUseHostname(false) and
+// SetUseFileSystemID(false) re-encrypt existing values without them.
+func TestExcludedSourcesAreRemoved(ts *testing.T) {
+	ResetForTest()
+	host, fsid := "host-a", uint64(0xaaa)
+	withIdentityHooks(ts, &host, &fsid, map[string]string{sourceMachineID: "0123456789abcdef0123456789abcdef"})
+	dir := testExeRoot(ts)
+	path := filepath.Join(dir, "exclude.json")
+	if err := LoadConfig(&TestConfig{DatabasePassword: "portable"}, 1, path, false, false); err != nil {
+		ts.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), "v3:fsid,hostname,machineid,") {
+		ts.Fatalf("expected fsid and hostname in the value: %s", raw)
+	}
+	SetUseHostname(false)
+	SetUseFileSystemID(false)
+	ResetForTest()
+	if err := LoadConfig(&TestConfig{}, 1, path, false, false); err != nil {
+		ts.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if !strings.Contains(string(raw), `"v3:machineid,machtype:`) {
+		ts.Fatalf("hostname and fsid must be removed: %s", raw)
+	}
+	// now portable: other host name and file system
+	host, fsid = "host-b", 0xbbb
+	ResetForTest()
+	cfg := &TestConfig{}
+	if err := LoadConfig(cfg, 1, path, false, false); err != nil || cfg.DatabasePassword != "portable" {
+		ts.Fatalf("value must be portable: %q %v", cfg.DatabasePassword, err)
+	}
+}
+
+// TestSourceAllowlist checks SA-19.
+func TestSourceAllowlist(ts *testing.T) {
+	for _, v := range []string{"v2:hostname:QUJD", "v2:fsid:QUJD", "v2:unknown:QUJD"} {
+		if _, _, err := parseV2Value(v); !errors.Is(err, errInvalidCiphertext) {
+			ts.Errorf("%q: v2 must reject the source, got %v", v, err)
+		}
+	}
+	if _, _, err := parseV3Value("v3:hostname,unknown:QUJD"); !errors.Is(err, errInvalidCiphertext) {
+		ts.Errorf("v3 must reject unknown sources, got %v", err)
+	}
+}
+
+// TestMaskIdentityValue checks SA-24.
+func TestMaskIdentityValue(ts *testing.T) {
+	masked := maskIdentityValue("build-01.example.com")
+	if strings.Contains(masked, "example") || !strings.HasPrefix(masked, "bu") {
+		ts.Errorf("unexpected mask %q", masked)
+	}
+	if maskIdentityValue("build-01.example.com") != masked || maskIdentityValue("other") == masked {
+		ts.Error("mask must be deterministic and distinguish values")
 	}
 }

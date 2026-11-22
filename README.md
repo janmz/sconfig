@@ -527,9 +527,11 @@ stored value starts with `v3:`, e.g.
 
 If a v3 value does not decrypt, the error says that the computer may have
 been renamed or the config file moved to another file system
-(`config.v3_key_mismatch`). Within one process, values of a file loaded
-before stay readable when another file is written, e.g. a backup on another
-drive with `UpdateConfig` / `updateEnv()`; that file gets its own `fsid`.
+(`config.v3_key_mismatch`). A backup on another drive written with
+`UpdateConfig` / `updateEnv()` gets the `fsid` of its own file system; a
+plaintext copy (`cleanConfig`) is written from the passwords in memory. If
+the file system ID cannot be read, a warning is issued once
+(`config.warn_no_fsid`) and the values are not bound to the file system.
 
 #### Migration of v2 values
 
@@ -556,9 +558,17 @@ config file at the same time.
   gets a new ID for every container; keep the config file on a volume.
 - **Con – machtype:** only a few possible values, so it adds almost no
   protection against guessing; it is stable.
-- Without any v2 source (e.g. containers without `/etc/machine-id`) only
-  `hostname`, `machtype` and `fsid` are left: weak protection, use a key
-  file there.
+- Without any strong source (no v2 source and no key file, e.g. containers
+  without `/etc/machine-id`) only `hostname`, `machtype` and `fsid` would be
+  left, which can be guessed. Encrypting then fails with
+  `config.weak_identity`; use a key file there, or allow the weak key
+  explicitly (`SetAllowWeakIdentity(true)` / `setAllowWeakIdentity(true)`,
+  one warning per process).
+- In containers whose host name changes, or when the config file must be
+  movable, leave the source out of new values: `SetUseHostname(false)` /
+  `setUseHostname(false)`, `SetUseFileSystemID(false)` /
+  `setUseFileSystemId(false)`. Existing values that use it are re-encrypted
+  without it on the next load (as long as they are still readable).
 
 Before renaming a computer or moving the config file, write it once with
 plaintext passwords (`cleanConfig`) and let it be encrypted again
@@ -594,9 +604,11 @@ the PHP version are no longer used (the host name is a v3 source again).
 - **FreeBSD:** `hostuuid` – output of `/sbin/sysctl -n kern.hostuuid`.
 - **Optional key file:** `keyfile` – hex of a secret file, see
   [Options](#options).
-- **Other systems:** no v2 source; v3 still has `hostname`, `machtype`
-  and `fsid` (weak, use a key file). Without any source encrypting fails
-  with `config.hardware_id_failed` (there is no fallback).
+- **Other systems:** no v2 source; `hostname`, `machtype` and `fsid`
+  alone are refused (`config.weak_identity`), see
+  [Pros and cons of the v3 sources](#pros-and-cons-of-the-v3-sources). Use
+  a key file. Without any source encrypting fails with
+  `config.hardware_id_failed` (there is no fallback).
 - **Tests:** with a hardware-ID override (`getHardwareID_func` of
   `LoadConfig`, `EnvLoader::setHardwareIdForTest()`) the only source is
   `override=<number>`.
@@ -664,10 +676,14 @@ is small (see below) – rotate passwords if such copies may have leaked.
 #### Options
 
 - Go: `sconfig.SetKeyFile(path)`, `sconfig.SetRejectLegacy(true)`,
-  `sconfig.SetWarningHandler(func(msg string) { … })` (default: stderr).
+  `sconfig.SetWarningHandler(func(msg string) { … })` (default: stderr),
+  `sconfig.SetAllowWeakIdentity(true)`, `sconfig.SetUseHostname(false)`,
+  `sconfig.SetUseFileSystemID(false)`.
 - PHP: `EnvLoader::setKeyFile($path)`, `EnvLoader::setRejectLegacy(true)`,
   `EnvLoader::setWarningHandler(fn (string $msg) => …)` (default:
-  `error_log()`), `EnvLoader::setExportPasswords(false)`.
+  `error_log()`), `EnvLoader::setExportPasswords(false)`,
+  `EnvLoader::setAllowWeakIdentity(true)`, `EnvLoader::setUseHostname(false)`,
+  `EnvLoader::setUseFileSystemId(false)`.
 - **Key file** (`SetKeyFile` / `setKeyFile`): adds the source `keyfile`. A
   missing file is created with 32 random bytes and permissions 0600 (Go on
   Windows: access for owner, SYSTEM and Administrators only). Keep it outside
@@ -675,6 +691,16 @@ is small (see below) – rotate passwords if such copies may have leaked.
   it cannot be decrypted without it. Go and PHP can share the same file.
 - **Strict mode** (`SetRejectLegacy` / `setRejectLegacy`): legacy v1 values
   are refused instead of being decrypted and migrated.
+- **Weak identity** (`SetAllowWeakIdentity` / `setAllowWeakIdentity`):
+  allows new values without a strong source (only host name, architecture
+  and file system ID); default: refused.
+- **Host name / file system** (`SetUseHostname`, `SetUseFileSystemID` /
+  `setUseHostname`, `setUseFileSystemId`): with `false` the source is left
+  out of new values (default: used).
+- **Test hooks** (PHP `EnvLoader::setHardwareIdForTest()`,
+  `MachineIdentity::setTestHooks()`) only work if the constant
+  `SCONFIG_TESTING` is defined (e.g. `<const>` in `phpunit.xml`);
+  otherwise they throw a `LogicException`.
 - **Warnings** are issued after migrating v1 values (rotate these passwords),
   when a migration was not possible, when an existing config file is
   readable by other users (Unix) and (PHP) when the `.env` file lies inside
@@ -936,7 +962,8 @@ depend on the v1 identifiers:
   plaintext passwords to the file; new files are created with permissions
   0600 and all files are written atomically.
 - **Debug output** (`debugOutput`, `DebugHardwareID`) prints identifiers and
-  key material; only use it for diagnosis.
+  key material (host name and `fsid` only masked as prefix plus SHA-256
+  prefix, the key file never); only use it for diagnosis.
 - **Key file** against file disclosure bugs and for containers, see
   [Options](#options).
 - **PHP:** `set()` refuses variable names with other characters than letters,

@@ -30,9 +30,31 @@ final class Crypto
     private const KEY_FILE_MAX = 4096;
     private const KEY_FILE_NEW = 32;
 
+    /** Source names a v2 value can contain. */
+    private const V2_SOURCES = [
+        MachineIdentity::SOURCE_MACHINE_GUID, MachineIdentity::SOURCE_SMBIOS_UUID,
+        MachineIdentity::SOURCE_MACHINE_ID, MachineIdentity::SOURCE_IOPLATFORM_UUID,
+        MachineIdentity::SOURCE_HOST_UUID, MachineIdentity::SOURCE_KEY_FILE,
+        MachineIdentity::SOURCE_OVERRIDE,
+    ];
+
+    /** Additional source names a v3 value can contain. */
+    private const V3_EXTRA_SOURCES = [
+        MachineIdentity::SOURCE_HOSTNAME, MachineIdentity::SOURCE_MACHTYPE, MachineIdentity::SOURCE_FSID,
+    ];
+
+    /**
+     * Sources that identify a machine or are secret; new values need one of
+     * them unless setAllowWeakIdentity(true) is set (same as V2_SOURCES).
+     */
+    private const STRONG_SOURCES = self::V2_SOURCES;
+
     private static ?int $hardwareIdOverride = null;
     private static ?string $keyFileValue = null;
     private static bool $rejectLegacy = false;
+    private static bool $allowWeakIdentity = false;
+    private static bool $excludeHostname = false;
+    private static bool $excludeFsid = false;
     private static ?string $legacyKey = null;
     private static ?\RuntimeException $legacyError = null;
     /** @var array<string, string>|null Machine-wide sources (without fsid and keyfile) */
@@ -40,10 +62,12 @@ final class Crypto
     private static ?\RuntimeException $sourcesError = null;
     /** @var string File system ID of the current .env file ('' = none) */
     private static string $fsid = '';
-    /** @var array<int, string> All file system IDs seen (current first) */
-    private static array $knownFsids = [];
+    /** @var array<string, string> Cached file system IDs by path */
+    private static array $fsidCache = [];
     /** @var array<string, string> */
     private static array $keys = [];
+    private static bool $weakWarned = false;
+    private static bool $fsidWarned = false;
 
     /**
      * Replace the machine identity by a fixed number (tests only): it is used
@@ -59,6 +83,24 @@ final class Crypto
     public static function setRejectLegacy(bool $reject): void
     {
         self::$rejectLegacy = $reject;
+    }
+
+    /** Allow new values without a strong source (warns once). */
+    public static function setAllowWeakIdentity(bool $allow): void
+    {
+        self::$allowWeakIdentity = $allow;
+    }
+
+    /** Bind new values to the host name (default true). */
+    public static function setUseHostname(bool $use): void
+    {
+        self::$excludeHostname = ! $use;
+    }
+
+    /** Bind new values to the file system of the .env file (default true). */
+    public static function setUseFileSystemId(bool $use): void
+    {
+        self::$excludeFsid = ! $use;
     }
 
     /**
@@ -85,7 +127,9 @@ final class Crypto
 
     /**
      * Select the .env file whose file system ID is used as source "fsid" by
-     * the following encrypt and decrypt calls.
+     * the following encrypt and decrypt calls. The ID is cached per path
+     * (Linux starts a "stat" process); if it cannot be read, a warning is
+     * issued once.
      *
      * @throws \RuntimeException If an external command hangs
      */
@@ -95,19 +139,21 @@ final class Crypto
         if (self::$hardwareIdOverride !== null) {
             return;
         }
-
-        try {
-            self::$fsid = MachineIdentity::fileSystemId($path);
-        } catch (CommandTimeoutException $e) {
-            throw new \RuntimeException(I18n::t('config.hardware_id_failed') . ': ' . $e->getMessage(), 0, $e);
+        if (! array_key_exists($path, self::$fsidCache)) {
+            try {
+                self::$fsidCache[$path] = MachineIdentity::fileSystemId($path);
+            } catch (CommandTimeoutException $e) {
+                throw new \RuntimeException(I18n::t('config.hardware_id_failed') . ': ' . $e->getMessage(), 0, $e);
+            }
         }
-        if (self::$fsid !== '') {
-            self::$knownFsids = array_values(array_diff(self::$knownFsids, [self::$fsid]));
-            array_unshift(self::$knownFsids, self::$fsid);
+        self::$fsid = self::$fsidCache[$path];
+        if (self::$fsid === '' && ! self::$excludeFsid && ! self::$fsidWarned) {
+            self::$fsidWarned = true;
+            Warnings::emit(I18n::t('config.warn_no_fsid', $path));
         }
     }
 
-    /** Forget all derived keys. */
+    /** Forget all derived keys and cached identity values. */
     public static function reset(): void
     {
         self::$legacyKey = null;
@@ -115,8 +161,10 @@ final class Crypto
         self::$sources = null;
         self::$sourcesError = null;
         self::$fsid = '';
-        self::$knownFsids = [];
+        self::$fsidCache = [];
         self::$keys = [];
+        self::$weakWarned = false;
+        self::$fsidWarned = false;
     }
 
     public static function isV2(string $value): bool
@@ -147,16 +195,18 @@ final class Crypto
 
     /**
      * Encrypt for the password field $field with the v3 key of all currently
-     * available sources.
+     * available (not excluded) sources. At least one strong source is
+     * required unless setAllowWeakIdentity(true) is set.
      *
-     * @throws \RuntimeException If no machine identity is available
+     * @throws \RuntimeException If no (strong) machine identity is available
      */
     public static function encrypt(string $plaintext, string $field): string
     {
-        $sources = self::sources();
+        $sources = self::newValueSources();
         if ($sources === []) {
             throw new \RuntimeException(I18n::t('config.hardware_id_failed'));
         }
+        self::checkStrongSource($sources);
         $names = array_keys($sources);
         sort($names, SORT_STRING);
         $key = self::keyFor('v3', $names, $sources);
@@ -210,31 +260,35 @@ final class Crypto
 
             return $plaintext;
         }
-        [$names, $b64] = self::parseSourceValue($value, $version . ':');
+        [$names, $b64] = self::parseSourceValue($value, $version);
         $data = self::decodeB64($b64);
-        $iv = substr($data, 0, self::IV_LENGTH);
-        $tag = substr($data, -self::TAG_LENGTH);
-        $ciphertext = (string) substr($data, self::IV_LENGTH, -self::TAG_LENGTH);
-        $aad = self::fieldAad($field);
-        foreach (self::candidateSources($names) as $sources) {
-            $key = self::keyFor($version, $names, $sources);
-            $plaintext = openssl_decrypt($ciphertext, self::METHOD, $key, OPENSSL_RAW_DATA, $iv, $tag, $aad);
-            if ($plaintext !== false) {
-                return $plaintext;
+        $key = self::keyFor($version, $names, self::sources());
+        $plaintext = openssl_decrypt(
+            (string) substr($data, self::IV_LENGTH, -self::TAG_LENGTH),
+            self::METHOD,
+            $key,
+            OPENSSL_RAW_DATA,
+            substr($data, 0, self::IV_LENGTH),
+            substr($data, -self::TAG_LENGTH),
+            self::fieldAad($field)
+        );
+        if ($plaintext === false) {
+            $message = 'decrypt: message authentication failed';
+            if ($version === 'v3') {
+                $message .= ' (' . I18n::t('config.v3_key_mismatch') . ')';
             }
-        }
-        $message = 'decrypt: message authentication failed';
-        if ($version === 'v3') {
-            $message .= ' (' . I18n::t('config.v3_key_mismatch') . ')';
+
+            throw new \RuntimeException($message);
         }
 
-        throw new \RuntimeException($message);
+        return $plaintext;
     }
 
     /**
      * True if a value should be re-encrypted with all current sources: every
-     * v2 value (migration to v3) and v3 values that use fewer sources than
-     * are available now (e.g. a key file was added).
+     * v2 value (migration to v3), v3 values that use an excluded source and
+     * v3 values that use fewer sources than are available now (e.g. a key
+     * file was added).
      */
     public static function needsUpgrade(string $value): bool
     {
@@ -243,8 +297,13 @@ final class Crypto
         }
 
         try {
-            [$names] = self::parseSourceValue($value, self::V3_PREFIX);
-            $sources = self::sources();
+            [$names] = self::parseSourceValue($value, 'v3');
+            foreach ($names as $name) {
+                if (self::isExcluded($name)) {
+                    return true;
+                }
+            }
+            $sources = self::newValueSources();
         } catch (\RuntimeException $e) {
             return false;
         }
@@ -261,15 +320,17 @@ final class Crypto
     }
 
     /**
-     * Split "<prefix><names>:<base64>"; names must be strictly ascending.
+     * Split "<version>:<names>:<base64>"; names must be known for the format
+     * and strictly ascending.
      *
      * @return array{0: array<int, string>, 1: string}
      */
-    private static function parseSourceValue(string $value, string $prefix): array
+    private static function parseSourceValue(string $value, string $version): array
     {
-        $parts = explode(':', substr($value, strlen($prefix)), 2);
+        $allowed = $version === 'v3' ? array_merge(self::V2_SOURCES, self::V3_EXTRA_SOURCES) : self::V2_SOURCES;
+        $parts = explode(':', substr($value, strlen($version) + 1), 2);
         if (count($parts) !== 2 || $parts[0] === '') {
-            throw new InvalidCiphertextException('malformed ' . rtrim($prefix, ':') . ' value');
+            throw new InvalidCiphertextException('malformed ' . $version . ' value');
         }
         if (strlen($parts[0]) > self::MAX_NAMES_LENGTH) {
             throw new InvalidCiphertextException('source list too long');
@@ -284,6 +345,9 @@ final class Crypto
             }
             if ($i > 0 && strcmp($names[$i - 1], $name) >= 0) {
                 throw new InvalidCiphertextException('source names not sorted or duplicated');
+            }
+            if (! in_array($name, $allowed, true)) {
+                throw new InvalidCiphertextException('unknown ' . $version . ' source ' . $name);
             }
         }
 
@@ -368,7 +432,7 @@ final class Crypto
     }
 
     /**
-     * All sources for new values: machine-wide sources (collected once), the
+     * All available sources: machine-wide sources (collected once), the
      * fsid of the current .env file and the optional key file.
      *
      * @return array<string, string>
@@ -406,27 +470,49 @@ final class Crypto
         return $sources;
     }
 
-    /**
-     * Source sets to try for a value: one set, or, if the value uses fsid,
-     * one per known file system ID (current .env file first), so that values
-     * of a file loaded before stay readable when another file is written.
-     *
-     * @param array<int, string> $names
-     * @return array<int, array<string, string>>
-     */
-    private static function candidateSources(array $names): array
+    /** True if the source is left out of new values. */
+    private static function isExcluded(string $name): bool
     {
-        $sources = self::sources();
-        if (! in_array(MachineIdentity::SOURCE_FSID, $names, true) || self::$knownFsids === []) {
-            return [$sources];
-        }
-        $sets = [];
-        foreach (self::$knownFsids as $fsid) {
-            $sources[MachineIdentity::SOURCE_FSID] = $fsid;
-            $sets[] = $sources;
+        return ($name === MachineIdentity::SOURCE_HOSTNAME && self::$excludeHostname) ||
+            ($name === MachineIdentity::SOURCE_FSID && self::$excludeFsid);
+    }
+
+    /**
+     * Sources for new values: all available sources without the excluded
+     * ones (existing values naming them stay readable through sources()).
+     *
+     * @return array<string, string>
+     */
+    private static function newValueSources(): array
+    {
+        $sources = [];
+        foreach (self::sources() as $name => $value) {
+            if (! self::isExcluded($name)) {
+                $sources[$name] = $value;
+            }
         }
 
-        return $sets;
+        return $sources;
+    }
+
+    /**
+     * Refuse (or, if allowed, warn once about) sources without a strong one.
+     *
+     * @param array<string, string> $sources
+     * @throws \RuntimeException
+     */
+    private static function checkStrongSource(array $sources): void
+    {
+        if (array_intersect(array_keys($sources), self::STRONG_SOURCES) !== []) {
+            return;
+        }
+        if (! self::$allowWeakIdentity) {
+            throw new \RuntimeException(I18n::t('config.weak_identity'));
+        }
+        if (! self::$weakWarned) {
+            self::$weakWarned = true;
+            Warnings::emit(I18n::t('config.warn_weak_identity'));
+        }
     }
 
     /**

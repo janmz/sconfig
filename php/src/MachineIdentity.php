@@ -48,17 +48,26 @@ final class MachineIdentity
     /** @var (callable(string): string)|null Test hook replacing fileSystemId() */
     private static $fileSystemIdFunc = null;
 
+    /** @var (callable(): array<string, string>)|null Test hook replacing collect() */
+    private static $v2SourcesFunc = null;
+
     /**
      * Replace host name and file system ID (tests only); null restores the
      * real functions.
      *
      * @param (callable(): (string|false))|null $hostname
      * @param (callable(string): string)|null $fileSystemId Returns the normalized fsid
+     * @param (callable(): array<string, string>)|null $v2Sources Returns the v2 sources
      */
-    public static function setTestHooks(?callable $hostname, ?callable $fileSystemId): void
+    public static function setTestHooks(?callable $hostname, ?callable $fileSystemId, ?callable $v2Sources = null): void
     {
+        $any = $hostname !== null || $fileSystemId !== null || $v2Sources !== null;
+        if ($any && ! defined('SCONFIG_TESTING')) {
+            throw new \LogicException('MachineIdentity::setTestHooks() is only available in tests (SCONFIG_TESTING)');
+        }
         self::$hostnameFunc = $hostname;
         self::$fileSystemIdFunc = $fileSystemId;
+        self::$v2SourcesFunc = $v2Sources;
     }
 
     /** Firmware placeholder UUIDs that do not identify a machine. */
@@ -140,7 +149,7 @@ final class MachineIdentity
      */
     public static function collectV3(): array
     {
-        $sources = self::collect();
+        $sources = self::$v2SourcesFunc !== null ? (self::$v2SourcesFunc)() : self::collect();
         $hostname = self::$hostnameFunc !== null ? (self::$hostnameFunc)() : gethostname();
         $value = $hostname === false ? '' : self::normalizeHostname($hostname);
         if ($value !== '') {
@@ -272,12 +281,21 @@ final class MachineIdentity
     }
 
     /**
+     * Lower-case A-Z only, independent of the locale (strtolower depends on
+     * it before PHP 8.2); identical to the Go implementation.
+     */
+    private static function asciiLower(string $value): string
+    {
+        return strtr($value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz');
+    }
+
+    /**
      * Trim and lower-case a host name; '' for empty, too long, non-printable
      * or placeholder names.
      */
     public static function normalizeHostname(string $value): string
     {
-        $v = strtolower(trim($value));
+        $v = self::asciiLower(trim($value));
         if (
             $v === '' || strlen($v) > 255 || in_array($v, self::PLACEHOLDER_HOSTNAMES, true) ||
             preg_match('/^[\x21-\x7e]+$/', $v) !== 1
@@ -293,7 +311,7 @@ final class MachineIdentity
      */
     public static function normalizeMachType(string $value): string
     {
-        $v = strtolower(trim($value));
+        $v = self::asciiLower(trim($value));
         switch ($v) {
             case 'x86_64':
             case 'amd64':
@@ -326,7 +344,7 @@ final class MachineIdentity
      */
     public static function normalizeFsid(string $value): string
     {
-        $v = strtolower(trim($value));
+        $v = self::asciiLower(trim($value));
         if (preg_match('/^[0-9a-f]{1,16}$/', $v) !== 1) {
             return '';
         }

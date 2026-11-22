@@ -214,13 +214,24 @@ func deriveKeyHKDF(sources map[string]string, salt, info string) ([]byte, error)
 // parseV2Value splits "v2:<names>:<base64>" into the source names and the
 // base64 part.
 func parseV2Value(value string) ([]string, string, error) {
-	return parseSourceValue(value, v2Prefix)
+	return parseSourceValue(value, v2Prefix, v2SourceNames)
+}
+
+// v2SourceNames are the only source names a v2 value can contain.
+var v2SourceNames = map[string]bool{
+	sourceMachineGUID:    true,
+	sourceSMBIOSUUID:     true,
+	sourceMachineID:      true,
+	sourceIOPlatformUUID: true,
+	sourceHostUUID:       true,
+	sourceKeyFile:        true,
+	sourceOverride:       true,
 }
 
 // parseSourceValue splits "<prefix><names>:<base64>" (v2 and v3) into the
-// source names and the base64 part. The names must be valid, strictly
-// ascending and limited in number and length.
-func parseSourceValue(value, prefix string) ([]string, string, error) {
+// source names and the base64 part. The names must be valid, known for the
+// format (allowed), strictly ascending and limited in number and length.
+func parseSourceValue(value, prefix string, allowed map[string]bool) ([]string, string, error) {
 	version := strings.TrimSuffix(prefix, ":")
 	parts := strings.SplitN(strings.TrimPrefix(value, prefix), ":", 2)
 	if len(parts) != 2 || parts[0] == "" {
@@ -240,6 +251,9 @@ func parseSourceValue(value, prefix string) ([]string, string, error) {
 		// canonical form: strictly ascending, no duplicates
 		if i > 0 && names[i-1] >= name {
 			return nil, "", fmt.Errorf("%w: source names not sorted or duplicated", errInvalidCiphertext)
+		}
+		if !allowed[name] {
+			return nil, "", fmt.Errorf("%w: unknown %s source %q", errInvalidCiphertext, version, name)
 		}
 	}
 	return names, parts[1], nil

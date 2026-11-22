@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.1.1.67] - 2026-11-21 16:55:17
+
+Umsetzung des Sicherheitsaudits vom 2026-11-21 (`securityreport.md`,
+SA-17 bis SA-26; alle Funde umgesetzt).
+
+### Security
+
+- **Go & PHP:** Neue Werte brauchen mindestens eine starke Quelle (v2-Quelle,
+  `keyfile` oder Test-`override`); nur `hostname`/`machtype`/`fsid` wird mit
+  `config.weak_identity` abgelehnt. Opt-in `SetAllowWeakIdentity(true)` /
+  `setAllowWeakIdentity(true)` mit einmaliger Warnung (SA-17).
+- **Go & PHP:** Kein fsid-Fallback mehr über im Prozess bekannte
+  Dateisysteme; Klartext-Kopien (`cleanConfig`) übernehmen die Passwörter
+  aus dem Speicher statt sie neu zu entschlüsseln (SA-18).
+- **Go & PHP:** Allowlist der Quellnamen je Format (v2 nur v2-Quellen,
+  `keyfile`, `override`; v3 zusätzlich `hostname`, `machtype`, `fsid`)
+  (SA-19).
+- **Go:** `machtype` unter Linux per `syscall.Uname`, sonst `uname` nur mit
+  absolutem Pfad (kein PATH-Fallback) (SA-20).
+- **PHP:** fsid je Pfad gecacht (ein `stat`-Prozess pro Datei); Go und PHP
+  warnen einmalig, wenn die fsid nicht lesbar ist (`config.warn_no_fsid`)
+  (SA-21).
+- **PHP:** v3-Normalisierung locale-unabhängig (`strtr` statt
+  `strtolower`) (SA-22).
+- **PHP:** `EnvLoader::setHardwareIdForTest()` und
+  `MachineIdentity::setTestHooks()` nur mit Konstante `SCONFIG_TESTING`
+  (sonst `LogicException`); in `php/phpunit.xml.dist` gesetzt (SA-23).
+- **Go:** Debug-Ausgabe zeigt `hostname` und `fsid` nur maskiert (Anfang +
+  SHA-256-Präfix) (SA-24).
+- **CI:** `permissions: contents: read`, Actions auf Commit-SHA gepinnt
+  (checkout v5.1.0, setup-go v6.5.0, cache v5.1.0, setup-php 2.40.0),
+  Go-Matrix 1.25.x/1.26.x/1.27.x, govulncheck auf 1.27.x (SA-26).
+
+### Added
+
+- **Go & PHP:** `SetUseHostname` / `setUseHostname` und `SetUseFileSystemID` /
+  `setUseFileSystemId`: Quelle für neue Werte abwählbar; vorhandene Werte
+  werden beim Laden ohne sie neu verschlüsselt (SA-25).
+- **Dev:** `symfony/filesystem` (Dev-Abhängigkeit in `php/`) auf 7.4.23
+  wegen Advisory PKSA-g499-cm4q-v35y.
+- **Tests:** schwache Identität, abgewählte Quellen, Allowlist, Maskierung
+  (Go und PHP).
+
+---
+
 ## [3.1.0.66] - 2026-11-21 13:05:51
 
 Schlüsselformat v3 mit zusätzlichen Identitätsquellen (Go und PHP

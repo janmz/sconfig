@@ -25,9 +25,11 @@ namespace Sconfig;
  *
  * @package Sconfig
  * @author Jan Neuhaus, VAYA Consulting
- * @version 3.1.0
+ * @version 3.1.1
  *
  * Changelog:
+ * 3.1.1 21.11.26 security audit SA-17..SA-26 (strong source required, opt-out of
+ *                hostname/fsid, source allowlist, no fsid fallback)
  * 3.1.0 21.11.26 v3 key format (additional sources hostname, machtype, fsid of the
  *                .env file), automatic migration of v2 values
  * 3.0.0 27.10.26 v2 key format shared with Go, migration of legacy values, format-preserving
@@ -110,6 +112,9 @@ class EnvLoader
      */
     public static function setHardwareIdForTest(?int $hardwareId): void
     {
+        if ($hardwareId !== null && ! defined('SCONFIG_TESTING')) {
+            throw new \LogicException('EnvLoader::setHardwareIdForTest() is only available in tests (SCONFIG_TESTING)');
+        }
         Crypto::setHardwareIdOverride($hardwareId);
     }
 
@@ -137,6 +142,38 @@ class EnvLoader
     public static function setRejectLegacy(bool $reject): void
     {
         Crypto::setRejectLegacy($reject);
+    }
+
+    /**
+     * Allow new values without a strong identity source (no machine ID such
+     * as /etc/machine-id and no key file, e.g. in a container). By default
+     * encrypting then fails, because host name, architecture and file system
+     * ID alone can be guessed. With true a warning is issued once. Prefer
+     * setKeyFile().
+     */
+    public static function setAllowWeakIdentity(bool $allow): void
+    {
+        Crypto::setAllowWeakIdentity($allow);
+    }
+
+    /**
+     * Bind new values to the host name (default true). With false, values
+     * stay readable when the host name changes (containers); existing values
+     * are re-encrypted without the host name on the next load().
+     */
+    public static function setUseHostname(bool $use): void
+    {
+        Crypto::setUseHostname($use);
+    }
+
+    /**
+     * Bind new values to the file system of the .env file (default true).
+     * With false, the file can be moved to another drive; existing values are
+     * re-encrypted without the file system ID on the next load().
+     */
+    public static function setUseFileSystemId(bool $use): void
+    {
+        Crypto::setUseFileSystemId($use);
     }
 
     /**
@@ -470,8 +507,14 @@ class EnvLoader
             }
             $prefix = $matches[1];
             $passwordKey = $prefix . '_PASSWORD';
+            $current = $parsed[$passwordKey] ?? '';
+            if ($current !== '' && ! self::isPasswordMarker($current)) {
+                // plaintext already in memory (e.g. updateEnv() with
+                // $cleanConfig to another file system): keep it
+                continue;
+            }
             if ($value === '') {
-                if (self::isPasswordMarker($parsed[$passwordKey] ?? '')) {
+                if (self::isPasswordMarker($current)) {
                     throw new \RuntimeException(I18n::t('config.secure_password_missing', $prefix));
                 }
 

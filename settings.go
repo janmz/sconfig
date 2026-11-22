@@ -25,6 +25,43 @@ var settings struct {
 	rejectLegacy bool
 	// warnHandler receives warnings; nil writes them to stderr.
 	warnHandler func(string)
+	// allowWeakIdentity permits new values without a strong source.
+	allowWeakIdentity bool
+	// excludeHostname / excludeFSID leave these sources out of new values.
+	excludeHostname bool
+	excludeFSID     bool
+}
+
+// SetAllowWeakIdentity controls what happens when no strong identity source
+// (a machine ID such as machineguid or machine-id, or a key file) is
+// available, e.g. in a container without /etc/machine-id. By default
+// encrypting then fails, because a key from host name, architecture and
+// file system ID alone can be guessed. With true such a weak key is used
+// and a warning is issued once per process. Prefer SetKeyFile.
+func SetAllowWeakIdentity(allow bool) {
+	apiMu.Lock()
+	defer apiMu.Unlock()
+	settings.allowWeakIdentity = allow
+}
+
+// SetUseHostname controls whether new values are bound to the host name
+// (default true). With false, values are portable between containers whose
+// host name changes; existing values that use the host name are re-encrypted
+// without it on the next LoadConfig (the old host name must still match).
+func SetUseHostname(use bool) {
+	apiMu.Lock()
+	defer apiMu.Unlock()
+	settings.excludeHostname = !use
+}
+
+// SetUseFileSystemID controls whether new values are bound to the file
+// system of the config file (default true). With false, the config file can
+// be moved to another drive; existing values that use the file system ID are
+// re-encrypted without it on the next LoadConfig (while still readable).
+func SetUseFileSystemID(use bool) {
+	apiMu.Lock()
+	defer apiMu.Unlock()
+	settings.excludeFSID = !use
 }
 
 // SetWarningHandler sets the function that receives warnings of the library

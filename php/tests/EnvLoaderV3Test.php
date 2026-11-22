@@ -48,6 +48,10 @@ class EnvLoaderV3Test extends TestCase
     protected function tearDown(): void
     {
         MachineIdentity::setTestHooks(null, null);
+        EnvLoader::setAllowWeakIdentity(false);
+        EnvLoader::setUseHostname(true);
+        EnvLoader::setUseFileSystemId(true);
+        EnvLoader::setKeyFile(null);
         $this->removeDir($this->tempDir);
         EnvLoader::setWarningHandler(null);
         EnvLoader::setExecutableRootForTest(null);
@@ -156,7 +160,8 @@ class EnvLoaderV3Test extends TestCase
     }
 
     /**
-     * Uses the real machine sources with a replaced host name and fsid.
+     * Uses a fixed machine-id, a replaced host name and fsid and the real
+     * machine type.
      */
     public function testBindsHostnameAndFileSystem(): void
     {
@@ -176,6 +181,10 @@ class EnvLoaderV3Test extends TestCase
                 }
 
                 return 'aaa';
+            },
+            // fixed strong source, so the test also runs in containers without one
+            static function (): array {
+                return ['machineid' => '0123456789abcdef0123456789abcdef'];
             }
         );
         $path = $this->tempDir . '/bound.env';
@@ -228,5 +237,98 @@ class EnvLoaderV3Test extends TestCase
         Crypto::reset();
         EnvLoader::load($path);
         self::assertSame('bound-secret', EnvLoader::get('DB_PASSWORD'));
+    }
+
+    /**
+     * Replace host name, fsid and v2 sources (real machine type is used).
+     *
+     * @param array<string, string> $v2
+     */
+    private function hooks(string &$host, string &$fsid, array $v2): void
+    {
+        EnvLoader::setHardwareIdForTest(null);
+        MachineIdentity::setTestHooks(
+            static function () use (&$host): string {
+                return $host;
+            },
+            static function () use (&$fsid): string {
+                return $fsid;
+            },
+            static function () use ($v2): array {
+                return $v2;
+            }
+        );
+    }
+
+    public function testWeakIdentityIsRefused(): void
+    {
+        $host = 'container-1';
+        $fsid = 'abc';
+        $this->hooks($host, $fsid, []);
+        $path = $this->tempDir . '/weak.env';
+        file_put_contents($path, "DB_PASSWORD=x\n");
+
+        try {
+            EnvLoader::load($path);
+            self::fail('a weak identity must be refused');
+        } catch (\RuntimeException $e) {
+            self::assertStringContainsString(I18n::t('config.weak_identity'), $e->getMessage());
+        }
+        EnvLoader::setAllowWeakIdentity(true);
+        EnvLoader::clear();
+        Crypto::reset();
+        EnvLoader::load($path);
+        EnvLoader::set('DB_PASSWORD', 'y');
+        EnvLoader::updateEnv($path);
+        self::assertSame([I18n::t('config.warn_weak_identity')], $this->warnings);
+
+        // a key file is a strong source
+        EnvLoader::setAllowWeakIdentity(false);
+        EnvLoader::setKeyFile($this->tempDir . '/weak.key');
+        EnvLoader::clear();
+        Crypto::reset();
+        file_put_contents($this->tempDir . '/keyfile.env', "DB_PASSWORD=z\n");
+        EnvLoader::load($this->tempDir . '/keyfile.env');
+        self::assertSame('z', EnvLoader::get('DB_PASSWORD'));
+    }
+
+    public function testExcludedSourcesAreRemoved(): void
+    {
+        $host = 'host-a';
+        $fsid = 'aaa';
+        $this->hooks($host, $fsid, ['machineid' => '0123456789abcdef0123456789abcdef']);
+        $path = $this->tempDir . '/exclude.env';
+        file_put_contents($path, "DB_PASSWORD=portable\n");
+        EnvLoader::load($path);
+        self::assertStringContainsString('v3:fsid,hostname,machineid,', (string) file_get_contents($path));
+
+        EnvLoader::setUseHostname(false);
+        EnvLoader::setUseFileSystemId(false);
+        EnvLoader::clear();
+        Crypto::reset();
+        EnvLoader::load($path);
+        self::assertStringContainsString(
+            'DB_SECURE_PASSWORD=v3:machineid,machtype:',
+            (string) file_get_contents($path)
+        );
+
+        $host = 'host-b';
+        $fsid = 'bbb';
+        EnvLoader::clear();
+        Crypto::reset();
+        EnvLoader::load($path);
+        self::assertSame('portable', EnvLoader::get('DB_PASSWORD'));
+    }
+
+    public function testSourceAllowlist(): void
+    {
+        foreach (['v2:hostname:QUJD', 'v2:fsid:QUJD', 'v3:hostname,unknown:QUJD'] as $value) {
+            try {
+                Crypto::decrypt($value, 'DB');
+                self::fail('unknown source accepted: ' . $value);
+            } catch (\Sconfig\InvalidCiphertextException $e) {
+                self::assertStringContainsString('source', $e->getMessage());
+            }
+        }
     }
 }

@@ -49,15 +49,28 @@ type keyState struct {
 	srcMachine   map[string]string
 	srcErr       error
 
-	// fsid is the file system ID of the current config file ("" = none);
-	// knownFSIDs are all file system IDs seen in this process (current
-	// first), so that values of a file loaded before stay readable when
-	// another file is written (e.g. a backup on another drive).
-	fsid       string
-	knownFSIDs []string
+	// fsid is the file system ID of the current config file ("" = none).
+	fsid string
 
 	// derived caches keys by format version, source names and values.
 	derived map[string][]byte
+
+	// weakWarned / fsidWarned: the warning was issued in this process.
+	weakWarned bool
+	fsidWarned bool
+}
+
+// strongSources identify a machine (or are secret) and cannot be guessed
+// from public information; new values need at least one of them unless
+// SetAllowWeakIdentity(true) is set.
+var strongSources = map[string]bool{
+	sourceMachineGUID:    true,
+	sourceSMBIOSUUID:     true,
+	sourceMachineID:      true,
+	sourceIOPlatformUUID: true,
+	sourceHostUUID:       true,
+	sourceKeyFile:        true,
+	sourceOverride:       true,
 }
 
 var keys keyState
@@ -101,12 +114,12 @@ func setConfigFile(path string) {
 		return
 	}
 	keys.fsid = configFileSystemID(path)
-	if keys.fsid != "" {
-		keys.knownFSIDs = slices.DeleteFunc(keys.knownFSIDs, func(v string) bool { return v == keys.fsid })
-		keys.knownFSIDs = slices.Insert(keys.knownFSIDs, 0, keys.fsid)
+	if keys.fsid == "" && !settings.excludeFSID && !keys.fsidWarned {
+		keys.fsidWarned = true
+		warn(t("config.warn_no_fsid", path))
 	}
 	if debugMode {
-		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] fsid of %s: %q\n", path, keys.fsid)
+		fmt.Fprintf(os.Stderr, "[sconfig DEBUG] fsid of %s: %s\n", path, maskIdentityValue(keys.fsid))
 	}
 }
 
@@ -149,24 +162,41 @@ func machineSources() (map[string]string, error) {
 	return sources, nil
 }
 
-// candidateSources returns the source sets to try for a value with the given
-// source names: one set, or, if the value uses fsid, one set per known file
-// system ID (current config file first).
-func candidateSources(names []string) ([]map[string]string, error) {
+// isExcludedSource reports whether a source is left out of new values
+// (SetUseHostname(false), SetUseFileSystemID(false)).
+func isExcludedSource(name string) bool {
+	return (name == sourceHostname && settings.excludeHostname) ||
+		(name == sourceFSID && settings.excludeFSID)
+}
+
+// newValueSources returns the sources used for new values: all available
+// sources without the excluded ones. Decryption uses machineSources, so
+// existing values that name an excluded source stay readable.
+func newValueSources() (map[string]string, error) {
 	sources, err := machineSources()
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(names, sourceFSID) || len(keys.knownFSIDs) == 0 {
-		return []map[string]string{sources}, nil
+	maps.DeleteFunc(sources, func(name, _ string) bool { return isExcludedSource(name) })
+	return sources, nil
+}
+
+// checkStrongSource refuses (or, with SetAllowWeakIdentity(true), warns once
+// about) a source set without any strong source.
+func checkStrongSource(sources map[string]string) error {
+	for name := range sources {
+		if strongSources[name] {
+			return nil
+		}
 	}
-	sets := make([]map[string]string, 0, len(keys.knownFSIDs))
-	for _, fsid := range keys.knownFSIDs {
-		set := maps.Clone(sources)
-		set[sourceFSID] = fsid
-		sets = append(sets, set)
+	if !settings.allowWeakIdentity {
+		return fmt.Errorf("%s: %w", t("config.weak_identity"), errNoMachineSource)
 	}
-	return sets, nil
+	if !keys.weakWarned {
+		keys.weakWarned = true
+		warn(t("config.warn_weak_identity"))
+	}
+	return nil
 }
 
 // sourceKey returns the key of format version ("v2" or "v3") for the given
@@ -287,9 +317,10 @@ func openData(key, data, aad []byte) (string, error) {
 }
 
 // needsUpgrade reports whether a value should be re-encrypted with all
-// current sources: every v2 value (migration to v3) and v3 values that were
-// encrypted with fewer sources than are available now (e.g. a key file was
-// added).
+// current sources: every v2 value (migration to v3), v3 values that use an
+// excluded source (SetUseHostname(false), SetUseFileSystemID(false)) and v3
+// values that were encrypted with fewer sources than are available now
+// (e.g. a key file was added).
 func needsUpgrade(value string) bool {
 	if isV2Value(value) {
 		return true
@@ -298,7 +329,10 @@ func needsUpgrade(value string) bool {
 	if err != nil {
 		return false
 	}
-	sources, err := machineSources()
+	if slices.ContainsFunc(names, isExcludedSource) {
+		return true
+	}
+	sources, err := newValueSources()
 	if err != nil || len(sources) <= len(names) {
 		return false
 	}
@@ -311,15 +345,19 @@ func needsUpgrade(value string) bool {
 }
 
 // encrypt encrypts text for the password field `field` with the v3 key of all
-// currently available sources and returns the complete "v3:<names>:<base64>"
-// value.
+// currently available (not excluded) sources and returns the complete
+// "v3:<names>:<base64>" value. At least one strong source is required unless
+// SetAllowWeakIdentity(true) is set.
 func encrypt(text, field string) (string, error) {
-	sources, err := machineSources()
+	sources, err := newValueSources()
 	if err != nil {
 		return "", err
 	}
 	if len(sources) == 0 {
 		return "", fmt.Errorf("%s: %w", t("config.hardware_id_failed"), errNoMachineSource)
+	}
+	if err := checkStrongSource(sources); err != nil {
+		return "", err
 	}
 	names := sortedSourceNames(sources)
 	key, err := sourceKey("v3", names, sources)
@@ -368,24 +406,17 @@ func decrypt(value, field string) (string, error) {
 		}
 		return openData(key, data, nil)
 	}
-	sets, err := candidateSources(names)
+	sources, err := machineSources()
 	if err != nil {
 		return "", err
 	}
-	var lastErr error
-	for _, sources := range sets {
-		key, err := sourceKey(version, names, sources)
-		if err != nil {
-			return "", err
-		}
-		plain, err := openData(key, data, fieldAAD(field))
-		if err == nil {
-			return plain, nil
-		}
-		lastErr = err
+	key, err := sourceKey(version, names, sources)
+	if err != nil {
+		return "", err
 	}
-	if version == "v3" {
-		return "", fmt.Errorf("%w (%s)", lastErr, t("config.v3_key_mismatch"))
+	plain, err := openData(key, data, fieldAAD(field))
+	if err != nil && version == "v3" {
+		return "", fmt.Errorf("%w (%s)", err, t("config.v3_key_mismatch"))
 	}
-	return "", lastErr
+	return plain, err
 }

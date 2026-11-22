@@ -546,10 +546,12 @@ z. B. `v3:fsid,hostname,machineguid,machtype,smbiosuuid:PW3g…`.
 Lässt sich ein v3-Wert nicht entschlüsseln, weist die Fehlermeldung darauf
 hin, dass der Rechner umbenannt oder die Konfigurationsdatei auf ein anderes
 Dateisystem verschoben worden sein kann (`config.v3_key_mismatch`).
-Innerhalb eines Prozesses bleiben Werte einer zuvor geladenen Datei lesbar,
-wenn eine andere Datei geschrieben wird, z. B. ein Backup auf einem anderen
-Laufwerk per `UpdateConfig` / `updateEnv()`; diese Datei erhält ihre eigene
-`fsid`.
+Ein Backup auf einem anderen Laufwerk per `UpdateConfig` / `updateEnv()`
+erhält die `fsid` seines eigenen Dateisystems; eine Klartext-Kopie
+(`cleanConfig`) wird aus den Passwörtern im Speicher geschrieben. Ist die
+Dateisystem-ID nicht lesbar, gibt es einmalig eine Warnung
+(`config.warn_no_fsid`), und die Werte sind nicht an das Dateisystem
+gebunden.
 
 #### Migration von v2-Werten
 
@@ -581,9 +583,18 @@ aktualisieren.
   Volume legen.
 - **Nachteil machtype:** nur wenige mögliche Werte, daher kaum Schutz gegen
   Raten; dafür stabil.
-- Ohne jede v2-Quelle (z. B. Container ohne `/etc/machine-id`) bleiben nur
-  `hostname`, `machtype` und `fsid`: schwacher Schutz, dort eine
-  Schlüsseldatei verwenden.
+- Ohne starke Quelle (keine v2-Quelle und keine Schlüsseldatei, z. B.
+  Container ohne `/etc/machine-id`) blieben nur `hostname`, `machtype` und
+  `fsid`, die sich erraten lassen. Verschlüsseln scheitert dann mit
+  `config.weak_identity`; dort eine Schlüsseldatei verwenden oder den
+  schwachen Schlüssel ausdrücklich erlauben (`SetAllowWeakIdentity(true)` /
+  `setAllowWeakIdentity(true)`, eine Warnung je Prozess).
+- In Containern mit wechselndem Hostnamen oder wenn die Konfigurationsdatei
+  verschiebbar sein muss, die Quelle für neue Werte weglassen:
+  `SetUseHostname(false)` / `setUseHostname(false)`,
+  `SetUseFileSystemID(false)` / `setUseFileSystemId(false)`. Vorhandene
+  Werte mit dieser Quelle werden beim nächsten Laden ohne sie neu
+  verschlüsselt (solange sie noch lesbar sind).
 
 Vor dem Umbenennen des Rechners oder Verschieben der Konfigurationsdatei
 die Datei einmal mit Klartext-Passwörtern schreiben (`cleanConfig`) und
@@ -620,10 +631,11 @@ verwendet (der Rechnername ist in v3 wieder eine Quelle).
 - **FreeBSD:** `hostuuid` – Ausgabe von `/sbin/sysctl -n kern.hostuuid`.
 - **Optionale Schlüsseldatei:** `keyfile` – Hex-Inhalt einer geheimen Datei,
   siehe [Optionen](#optionen).
-- **Andere Systeme:** keine v2-Quelle; v3 hat weiterhin `hostname`,
-  `machtype` und `fsid` (schwach, Schlüsseldatei verwenden). Ganz ohne
-  Quelle scheitert Verschlüsseln mit `config.hardware_id_failed` (es gibt
-  keinen Ersatz).
+- **Andere Systeme:** keine v2-Quelle; `hostname`, `machtype` und `fsid`
+  allein werden abgelehnt (`config.weak_identity`), siehe
+  [Vor- und Nachteile der v3-Quellen](#vor--und-nachteile-der-v3-quellen).
+  Eine Schlüsseldatei verwenden. Ganz ohne Quelle scheitert Verschlüsseln
+  mit `config.hardware_id_failed` (es gibt keinen Ersatz).
 - **Tests:** Mit Hardware-ID-Überschreibung (`getHardwareID_func` von
   `LoadConfig`, `EnvLoader::setHardwareIdForTest()`) ist die einzige Quelle
   `override=<Zahl>`.
@@ -695,10 +707,14 @@ falls solche Kopien in fremde Hände gelangt sein können.
 #### Optionen
 
 - Go: `sconfig.SetKeyFile(pfad)`, `sconfig.SetRejectLegacy(true)`,
-  `sconfig.SetWarningHandler(func(msg string) { … })` (Standard: stderr).
+  `sconfig.SetWarningHandler(func(msg string) { … })` (Standard: stderr),
+  `sconfig.SetAllowWeakIdentity(true)`, `sconfig.SetUseHostname(false)`,
+  `sconfig.SetUseFileSystemID(false)`.
 - PHP: `EnvLoader::setKeyFile($pfad)`, `EnvLoader::setRejectLegacy(true)`,
   `EnvLoader::setWarningHandler(fn (string $msg) => …)` (Standard:
-  `error_log()`), `EnvLoader::setExportPasswords(false)`.
+  `error_log()`), `EnvLoader::setExportPasswords(false)`,
+  `EnvLoader::setAllowWeakIdentity(true)`, `EnvLoader::setUseHostname(false)`,
+  `EnvLoader::setUseFileSystemId(false)`.
 - **Schlüsseldatei** (`SetKeyFile` / `setKeyFile`): fügt die Quelle
   `keyfile` hinzu. Eine fehlende Datei wird mit 32 Zufallsbytes und den
   Rechten 0600 angelegt (Go unter Windows: Zugriff nur für Eigentümer,
@@ -707,6 +723,16 @@ falls solche Kopien in fremde Hände gelangt sein können.
   entschlüsseln. Go und PHP können dieselbe Datei nutzen.
 - **Strikter Modus** (`SetRejectLegacy` / `setRejectLegacy`): Alt-Werte v1
   werden abgelehnt statt entschlüsselt und migriert.
+- **Schwache Identität** (`SetAllowWeakIdentity` / `setAllowWeakIdentity`):
+  erlaubt neue Werte ohne starke Quelle (nur Rechnername, Architektur und
+  Dateisystem-ID); Standard: abgelehnt.
+- **Rechnername / Dateisystem** (`SetUseHostname`, `SetUseFileSystemID` /
+  `setUseHostname`, `setUseFileSystemId`): mit `false` wird die Quelle für
+  neue Werte weggelassen (Standard: verwendet).
+- **Test-Hooks** (PHP `EnvLoader::setHardwareIdForTest()`,
+  `MachineIdentity::setTestHooks()`) wirken nur, wenn die Konstante
+  `SCONFIG_TESTING` definiert ist (z. B. `<const>` in `phpunit.xml`);
+  sonst werfen sie eine `LogicException`.
 - **Warnungen** gibt es nach der Migration von v1-Werten (diese Passwörter
   wechseln), wenn eine Migration nicht möglich war, wenn eine vorhandene
   Config-Datei für andere Benutzer lesbar ist (Unix) und (PHP) wenn die
@@ -985,7 +1011,8 @@ hängen weiter an den v1-Identifikatoren:
   schreibt Klartext-Passwörter in die Datei; neue Dateien werden mit den
   Rechten 0600 angelegt und alle Dateien atomar geschrieben.
 - **Debug-Ausgabe** (`debugOutput`, `DebugHardwareID`) gibt Identifikatoren
-  und Schlüsselmaterial aus; nur zur Diagnose verwenden.
+  und Schlüsselmaterial aus (Rechnername und `fsid` nur maskiert als Anfang
+  plus SHA-256-Präfix, die Schlüsseldatei nie); nur zur Diagnose verwenden.
 - **Schlüsseldatei** gegen Datei-Leselücken und für Container, siehe
   [Optionen](#optionen).
 - **PHP:** `set()` lehnt Variablennamen mit anderen Zeichen als Buchstaben,

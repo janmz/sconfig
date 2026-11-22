@@ -5,6 +5,10 @@
          colors="true"
          failOnRisky="true"
          failOnWarning="true">
+    <php>
+        <!-- enables the test hooks (setHardwareIdForTest, setTestHooks) -->
+        <const name="SCONFIG_TESTING" value="true"/>
+    </php>
     <testsuites>
         <testsuite name="sconfig">
             <directory>tests</directory>

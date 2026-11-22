@@ -37,6 +37,7 @@ package sconfig
  */
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -142,10 +143,12 @@ func formatFSID(id uint64) string {
 	return strconv.FormatUint(id, 16)
 }
 
-// hostnameFunc and fileSystemIDFunc can be replaced by tests.
+// hostnameFunc, fileSystemIDFunc and machineSourcesV2Func can be replaced
+// by tests.
 var (
-	hostnameFunc     = os.Hostname
-	fileSystemIDFunc = fileSystemID
+	hostnameFunc         = os.Hostname
+	fileSystemIDFunc     = fileSystemID
+	machineSourcesV2Func = collectMachineSourcesV2
 )
 
 // readHostname returns the normalized host name or "".
@@ -178,11 +181,11 @@ func readMachType() (string, error) {
 			return "arm64", nil
 		}
 	}
-	out, err := runCommand(resolveTool("uname", "/usr/bin/uname", "/bin/uname"), "-m")
+	machine, err := unameMachine()
 	if err != nil {
 		return "", ignoreUnlessTimeout(err)
 	}
-	return normalizeMachType(string(out)), nil
+	return normalizeMachType(machine), nil
 }
 
 // ignoreUnlessTimeout drops errors of unreadable sources but keeps timeouts.
@@ -197,7 +200,7 @@ func ignoreUnlessTimeout(err error) error {
 // hostname and machtype). fsid depends on the config file and is added by
 // the key state.
 func collectMachineSourcesV3() (map[string]string, error) {
-	sources, err := collectMachineSourcesV2()
+	sources, err := machineSourcesV2Func()
 	if err != nil {
 		return nil, err
 	}
@@ -248,11 +251,47 @@ func deriveKeyV3(sources map[string]string) ([]byte, error) {
 // parseV3Value splits "v3:<names>:<base64>" into the source names and the
 // base64 part.
 func parseV3Value(value string) ([]string, string, error) {
-	return parseSourceValue(value, v3Prefix)
+	return parseSourceValue(value, v3Prefix, v3SourceNames)
+}
+
+// v3SourceNames are the only source names a v3 value can contain.
+var v3SourceNames = map[string]bool{
+	sourceMachineGUID:    true,
+	sourceSMBIOSUUID:     true,
+	sourceMachineID:      true,
+	sourceIOPlatformUUID: true,
+	sourceHostUUID:       true,
+	sourceKeyFile:        true,
+	sourceOverride:       true,
+	sourceHostname:       true,
+	sourceMachType:       true,
+	sourceFSID:           true,
+}
+
+// maskedDebugSources are shown masked in debug output (host name may be
+// personal data, fsid is a key input that is not visible elsewhere).
+var maskedDebugSources = map[string]bool{
+	sourceHostname: true,
+	sourceFSID:     true,
+}
+
+// maskIdentityValue shows the first two characters and a short SHA-256
+// prefix of a value: enough to compare two debug runs without disclosing it.
+func maskIdentityValue(value string) string {
+	if value == "" {
+		return `""`
+	}
+	sum := sha256.Sum256([]byte(value))
+	prefix := value
+	if len(prefix) > 2 {
+		prefix = prefix[:2]
+	}
+	return fmt.Sprintf("%s… (sha256 %x)", prefix, sum[:4])
 }
 
 // printMachineSources writes the identity sources of the given format
-// version ("v3") to stderr (debug only). The key file value is not shown.
+// version ("v3") to stderr (debug only). The key file value is not shown,
+// host name and fsid are masked.
 func printMachineSources(version string, sources map[string]string, err error) {
 	fmt.Fprintf(os.Stderr, "[sconfig DEBUG] ========================================\n")
 	fmt.Fprintf(os.Stderr, "[sconfig DEBUG] Machine identity (%s)\n", version)
@@ -268,6 +307,8 @@ func printMachineSources(version string, sources map[string]string, err error) {
 		value := sources[name]
 		if name == sourceKeyFile {
 			value = "(secret, not shown)"
+		} else if maskedDebugSources[name] {
+			value = maskIdentityValue(value)
 		}
 		fmt.Fprintf(os.Stderr, "[sconfig DEBUG]   %s=%s\n", name, value)
 	}
