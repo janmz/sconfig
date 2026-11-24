@@ -10,9 +10,10 @@ package sconfig
  * from machine-bound data (see hwid_v3.go) that only this machine can
  * reproduce; it cannot be guessed without access to the machine.
  *
- * Version: see version.go
+ * Version: 3.1.1.69 (in version.go zu ändern)
  *
  * ChangeLog:
+ * 24.11.26	3.1.1	Fix: Raised php version to >=8.2 to fix ci workflow
  *  21.11.26	3.1.1	Security: audit SA-17..SA-26 (strong source required, opt-out of hostname/fsid, source allowlist, no fsid fallback, masked debug output)
  *  21.11.26	3.1.0	Feature: v3 key format (additional sources hostname, machtype and fsid of the config file), automatic migration of v1 and v2 values
  *  27.10.26	3.0.0	Feature: v2 key format (HKDF, stable machine sources, source list per value), automatic migration of v1 values, pointer/map/array support, atomic writes

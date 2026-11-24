@@ -210,7 +210,7 @@ in der Struct weiterhin entschlüsselt (wie nach LoadConfig).
 - Unterstützung für Standardwerte
 - Integration mit PHP's nativen `$_ENV` und `getenv()`
 - PSR-4 Autoloading
-- Keine externen Abhängigkeiten (PHP 7.4+)
+- Keine externen Abhängigkeiten (PHP 8.2+)
 - AES-256-GCM Verschlüsselung für sichere Passwortspeicherung
 - Eingebaute Übersetzungen in `php/locales/` (Kopien der Go-Dateien in `locales/`)
 

@@ -11,6 +11,12 @@ if (! is_file($autoload)) {
 }
 require $autoload;
 
+// Test files are created with file_put_contents(); with the usual Unix umask
+// 022 they get mode 0644 and EnvFile emits a "readable by other users"
+// warning, which breaks tests asserting the exact warning list. Restrict new
+// files to the owner (tests that need 0644 chmod explicitly). No-op on Windows.
+umask(0077);
+
 // Ensure locales are found when running from repo root (sconfig) or from php/
 $localesCandidates = [
     dirname(__DIR__) . '/locales',

@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## [3.1.1.69] - 2026-11-24 11:18:12
+
+- Fix: Raised php version to >=8.2 to fix ci workflow
+
+### Changed
+
+- **PHP:** Mindestversion von PHP 7.4 auf **8.2** angehoben
+  (`composer.json`, `php/composer.json`, Lock-Dateien, READMEs) –
+  entspricht der in der CI getesteten Version; die Dev-Werkzeuge
+  (php-cs-fixer mit Symfony 7.4) setzen PHP 8.2 ohnehin voraus.
+- **Dev:** `.vscode/settings.json` nimmt `php/vendor/**` von der
+  PHP-Problemanzeige aus (`php.problems.exclude`).
+
+## [3.1.1.68] - 2026-11-24 10:57:47
+
+### Fixed
+
+- **PHP-Tests:** `tests/bootstrap.php` setzt `umask(0077)`. Unter Linux
+  (CI) legte `file_put_contents` Testdateien mit 0644 an; die dadurch
+  ausgelöste Warnung `config.warn_permissions` brach Tests, die die exakte
+  Warnungsliste prüfen (`testMigrationWarningAndStrictMode`,
+  `testV2ValueIsMigratedSilently`, `testWeakIdentityIsRefused`).
+
 ## [3.1.1.67] - 2026-11-21 16:55:17
 
 Umsetzung des Sicherheitsaudits vom 2026-11-21 (`securityreport.md`,

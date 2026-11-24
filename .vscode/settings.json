@@ -2,6 +2,9 @@
     "php.suggest.basic": true,
     "php.validate.enable": true,
     "php.validate.executablePath": "",
+    "php.problems.exclude": {
+        "php/vendor/**": true
+    },
     "[php]": {
         "editor.defaultFormatter": "junstyle.php-cs-fixer",
         "editor.formatOnSave": true

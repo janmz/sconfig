@@ -231,7 +231,7 @@ DEBUG=false
 - Support for default values
 - Integration with PHP's native `$_ENV` and `getenv()`
 - PSR-4 autoloading
-- No external dependencies (PHP 7.4+)
+- No external dependencies (PHP 8.2+)
 - AES-256-GCM encryption for secure password storage
 - Built-in translations in `php/locales/` (copies of the Go `locales/` files)
 
